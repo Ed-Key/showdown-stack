@@ -1,0 +1,14 @@
+{
+  "info": { "number of battles": 1000, "cutoff": 1630 },
+  "data": {
+    "Dragapult": {
+      "Moves": { "dracometeor": 0.85, "shadowball": 0.79, "uturn": 0.62, "flamethrower": 0.41, "hex": 0.18 },
+      "Items": { "choicespecs": 0.48, "heavydutyboots": 0.22, "choicescarf": 0.12 },
+      "Abilities": { "infiltrator": 0.67, "cursedbody": 0.33 },
+      "Spreads": { "Timid:0/0/4/252/0/252": 0.51, "Modest:0/0/0/252/4/252": 0.22 },
+      "Tera Types": { "Ghost": 0.31, "Fairy": 0.22, "Fire": 0.18 },
+      "Raw count": 450,
+      "usage": 0.42
+    }
+  }
+}
