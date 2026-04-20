@@ -68,6 +68,55 @@
     return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
+  // Gen 9 type chart — entries where attack does non-1x damage. Omitted
+  // entries default to 1x. Used for lead-selection heuristic at team preview.
+  const TYPE_CHART = {
+    Normal:   { Rock: 0.5, Ghost: 0, Steel: 0.5 },
+    Fire:     { Fire: 0.5, Water: 0.5, Grass: 2, Ice: 2, Bug: 2, Rock: 0.5, Dragon: 0.5, Steel: 2 },
+    Water:    { Fire: 2, Water: 0.5, Grass: 0.5, Ground: 2, Rock: 2, Dragon: 0.5 },
+    Electric: { Water: 2, Electric: 0.5, Grass: 0.5, Ground: 0, Flying: 2, Dragon: 0.5 },
+    Grass:    { Fire: 0.5, Water: 2, Grass: 0.5, Poison: 0.5, Ground: 2, Flying: 0.5, Bug: 0.5, Rock: 2, Dragon: 0.5, Steel: 0.5 },
+    Ice:      { Fire: 0.5, Water: 0.5, Grass: 2, Ice: 0.5, Ground: 2, Flying: 2, Dragon: 2, Steel: 0.5 },
+    Fighting: { Normal: 2, Ice: 2, Poison: 0.5, Flying: 0.5, Psychic: 0.5, Bug: 0.5, Rock: 2, Ghost: 0, Dark: 2, Steel: 2, Fairy: 0.5 },
+    Poison:   { Grass: 2, Poison: 0.5, Ground: 0.5, Rock: 0.5, Ghost: 0.5, Steel: 0, Fairy: 2 },
+    Ground:   { Fire: 2, Electric: 2, Grass: 0.5, Poison: 2, Flying: 0, Bug: 0.5, Rock: 2, Steel: 2 },
+    Flying:   { Electric: 0.5, Grass: 2, Fighting: 2, Bug: 2, Rock: 0.5, Steel: 0.5 },
+    Psychic:  { Fighting: 2, Poison: 2, Psychic: 0.5, Dark: 0, Steel: 0.5 },
+    Bug:      { Fire: 0.5, Grass: 2, Fighting: 0.5, Poison: 0.5, Flying: 0.5, Psychic: 2, Ghost: 0.5, Dark: 2, Steel: 0.5, Fairy: 0.5 },
+    Rock:     { Fire: 2, Ice: 2, Fighting: 0.5, Ground: 0.5, Flying: 2, Bug: 2, Steel: 0.5 },
+    Ghost:    { Normal: 0, Psychic: 2, Ghost: 2, Dark: 0.5 },
+    Dragon:   { Dragon: 2, Steel: 0.5, Fairy: 0 },
+    Dark:     { Fighting: 0.5, Psychic: 2, Ghost: 2, Dark: 0.5, Fairy: 0.5 },
+    Steel:    { Fire: 0.5, Water: 0.5, Electric: 0.5, Ice: 2, Rock: 2, Steel: 0.5, Fairy: 2 },
+    Fairy:    { Fire: 0.5, Fighting: 2, Poison: 0.5, Dragon: 2, Dark: 2, Steel: 0.5 },
+  };
+
+  function typeMult(atkType, defTypes) {
+    let m = 1;
+    for (const dt of defTypes || []) {
+      const eff = TYPE_CHART[atkType] && TYPE_CHART[atkType][dt];
+      if (eff !== undefined) m *= eff;
+    }
+    return m;
+  }
+
+  // Score: how good is `myMon` as a lead against `oppTeam`?
+  // For each opp mon: (my best STAB effectiveness vs them) - (their best STAB vs me).
+  // Summed across all 6 opp mons. Higher = better lead.
+  function leadScore(myMon, oppTeam) {
+    const myTypes = resolveTypes(myMon.speciesForme || myMon.species);
+    let total = 0;
+    for (const opp of oppTeam) {
+      const oppName = (opp.species && opp.species.name) || opp.speciesForme || opp.species;
+      const oppTypes = resolveTypes(oppName);
+      let myBest = 0, theirBest = 0;
+      for (const t of myTypes) myBest = Math.max(myBest, typeMult(t, oppTypes));
+      for (const t of oppTypes) theirBest = Math.max(theirBest, typeMult(t, myTypes));
+      total += myBest - theirBest;
+    }
+    return total;
+  }
+
   // Compute opponent's likely stats from Showdown's base-stat data. Much
   // better than flat placeholders (atk=200, def=150 etc.) — the engine's
   // damage calculations need real numbers to give meaningful advice.
@@ -453,14 +502,33 @@
       return;
     }
     if (!b.myPokemon || !b.myPokemon.length) return;
-    // Team Preview: engine has no "pick a lead" mode — skip analysis and show
-    // a clear message instead of silently failing.
+    // Team Preview: engine can't run MCTS here (no "active" pokemon yet).
+    // Use a type-matchup heuristic across all 6 opp mons to rank our 6 leads.
+    // Fast (no engine call), reasonable quality, beats no advice.
     if (b.request && b.request.teamPreview) {
-      hdrEl.textContent = 'Copilot — team preview';
-      bestEl.textContent = 'pick a lead manually';
-      statsEl.textContent = 'MCTS lead-selection not yet implemented';
-      pvEl.textContent = 'PV: —';
-      altsEl.textContent = 'Follow-up: Phase 2 feature';
+      const myTeam = b.myPokemon || [];
+      const oppTeam = (br.battle.farSide && br.battle.farSide.pokemon) || [];
+      if (myTeam.length && oppTeam.length) {
+        const ranked = myTeam
+          .map(m => ({
+            name: m.speciesForme || m.species,
+            score: leadScore(m, oppTeam),
+          }))
+          .sort((a, b) => b.score - a.score);
+        const best = ranked[0];
+        hdrEl.textContent = 'Copilot — team preview';
+        bestEl.textContent = `→ ${best.name}`;
+        statsEl.textContent = `matchup score ${best.score.toFixed(1)} across 6 opps`;
+        pvEl.textContent = `PV: heuristic (not MCTS)`;
+        altsEl.textContent = ranked
+          .slice(1, 4)
+          .map(r => `${r.name} (${r.score.toFixed(1)})`)
+          .join(' | ');
+      } else {
+        hdrEl.textContent = 'Copilot — team preview';
+        bestEl.textContent = 'waiting for opponent preview';
+        statsEl.textContent = '';
+      }
       return;
     }
     try {
