@@ -102,17 +102,18 @@ async def _run_session(
                 break
             cur_turn = getattr(battle, "turn", 0) or 0
             if cur_turn > last_turn_processed:
-                last_turn_processed = cur_turn
-                state = adapter.to_engine_json(battle)
                 app.push_turn_event(f"--- turn {cur_turn} ---")
                 try:
+                    state = adapter.to_engine_json(battle)
                     async for update in engine.stream_analyze(state, time_limit_ms=8000):
                         app.push_engine_update(update)
                         if update.is_final:
                             break
+                    # Only mark turn processed on success — retry on next poll if anything raised
+                    last_turn_processed = cur_turn
                 except Exception as e:
-                    app.push_turn_event(f"engine error: {e}")
-                    logger.exception("engine call failed")
+                    app.push_turn_event(f"analysis error: {e}")
+                    logger.exception("turn analysis failed (turn %s)", cur_turn)
 
     # Start TUI + spectator concurrently
     spec_task = asyncio.create_task(_spectator_loop())
