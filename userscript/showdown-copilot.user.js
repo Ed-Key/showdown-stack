@@ -360,10 +360,14 @@
     const key = `${br.id}:${t}:${rqid}`;
     if (key === lastKey) return;
     lastKey = key;
-    // Analyze whenever there's a pending decision (move or force-switch) or we
-    // see a real turn with a populated team. Skip when just spectating or idle.
+    // Only analyze when there's actually a decision to make. After you submit
+    // a move, b.request gets cleared / rqid bumps — we'd otherwise fire a
+    // redundant analysis and clobber the real stats display with "requesting…".
     const pendingDecision = !!b.request && !b.request.wait;
-    if (!pendingDecision && t < 1) return;
+    if (!pendingDecision) {
+      // Leave the last-completed analysis visible; don't overwrite
+      return;
+    }
     if (!b.myPokemon || !b.myPokemon.length) return;
     // Team Preview: engine has no "pick a lead" mode — skip analysis and show
     // a clear message instead of silently failing.
