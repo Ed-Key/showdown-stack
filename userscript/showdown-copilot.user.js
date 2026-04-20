@@ -68,6 +68,52 @@
     return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
+  // Compute opponent's likely stats from Showdown's base-stat data. Much
+  // better than flat placeholders (atk=200, def=150 etc.) — the engine's
+  // damage calculations need real numbers to give meaningful advice.
+  //
+  // Assumption: opponent is running a standard offensive spread (252 EVs in
+  // their better attacking stat + 252 Spe, neutral nature, 31 IVs). Not
+  // perfect — a defensive mon with 252 HP/Def would be wrong — but this
+  // delta vs. reality is way smaller than placeholders vs. reality.
+  //
+  // Formula (gen 3+):
+  //   HP    = floor((2*base + IV + EV/4) * L / 100) + L + 10
+  //   Other = floor(floor((2*base + IV + EV/4) * L / 100) + 5) * natureMult
+  function computeOpponentStats(speciesName, level) {
+    const fallback = {
+      maxhp: 250,
+      stats: { atk: 200, def: 150, spa: 200, spd: 150, spe: 180 },
+      ability: 'none',
+    };
+    try {
+      const sp = pageWin.Dex && pageWin.Dex.species
+        ? pageWin.Dex.species.get(speciesName) : null;
+      if (!sp || !sp.baseStats) return fallback;
+      const bs = sp.baseStats;
+      const isSpecial = (bs.spa || 0) > (bs.atk || 0);
+      const atkEV = isSpecial ? 0 : 252;
+      const spaEV = isSpecial ? 252 : 0;
+      const spe252 = 252;
+      const statCore = (base, ev) =>
+        Math.floor((2 * base + 31 + Math.floor(ev / 4)) * level / 100);
+      return {
+        maxhp: statCore(bs.hp, 0) + level + 10,
+        stats: {
+          atk: statCore(bs.atk, atkEV) + 5,
+          def: statCore(bs.def, 0) + 5,
+          spa: statCore(bs.spa, spaEV) + 5,
+          spd: statCore(bs.spd, 0) + 5,
+          spe: statCore(bs.spe, spe252) + 5,
+        },
+        ability: (sp.abilities && sp.abilities[0])
+          ? norm(sp.abilities[0]) : 'none',
+      };
+    } catch (e) {
+      return fallback;
+    }
+  }
+
   // Resolve types for any species. Tries the local hardcoded table first
   // (common cases, fast), then falls back to Showdown's own Dex which has
   // every species. Without this, unknown species end up with types=[] and
@@ -123,19 +169,28 @@
   function buildOppPokemon(p) {
     const speciesRaw = p.speciesForme || (p.species && p.species.name) || p.species;
     const species = norm(speciesRaw);
+    const level = p.level || 100;
     const hpPct = p.hp || 0;
     const revealed = (p.moveTrack || []).map(m => ({ id: norm(m[0]), pp: 8 }));
+    const computed = computeOpponentStats(speciesRaw, level);
+    const maxhp = computed.maxhp;
+    // hpPct is 0-100 in Showdown for opp mons; scale to absolute
+    const hp = Math.max(0, Math.round(hpPct * maxhp / 100));
+    // Prefer revealed ability over inferred default
+    const ability = norm(p.ability || p.baseAbility || computed.ability || 'none');
     return {
-      species, level: p.level || 100,
+      species, level,
       types: resolveTypes(speciesRaw),
-      hp: Math.max(1, Math.round(hpPct * 2.5)),
-      maxhp: 250,
-      ability: norm(p.ability || p.baseAbility || 'none'),
+      hp, maxhp,
+      ability,
       item: norm(p.item || 'none'),
       nature: 'Serious',
       evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 },
-      attack: 200, defense: 150,
-      specialAttack: 200, specialDefense: 150, speed: 180,
+      attack: computed.stats.atk,
+      defense: computed.stats.def,
+      specialAttack: computed.stats.spa,
+      specialDefense: computed.stats.spd,
+      speed: computed.stats.spe,
       status: STATUS[(p.status || '').toLowerCase()] || 'None',
       restTurns: 0, sleepTurns: 0, weightKg: 0.0,
       moves: padMoves(revealed),
