@@ -404,12 +404,16 @@ export default defineContentScript({
       }
       const b = br.battle;
       const t = b.turn || 0;
-      const rqid = b.request?.rqid ?? 0;
+      // Showdown stores the current decision request on the room, not on
+      // the battle object. b.request is usually null; br.request is the
+      // real source of truth for team preview / move select / force switch.
+      const req = br.request || b.request;
+      const rqid = req?.rqid ?? 0;
       const key = `${br.id}:${t}:${rqid}`;
       if (key === lastKey) return;
 
       // Team Preview: run the fast heuristic (no engine call)
-      if (b.request?.teamPreview) {
+      if (req?.teamPreview) {
         const myTeam = b.myPokemon || [];
         const oppTeam = b.farSide?.pokemon || [];
         if (myTeam.length && oppTeam.length >= 1) {
@@ -438,7 +442,7 @@ export default defineContentScript({
         return;
       }
 
-      const pendingDecision = !!b.request && !b.request.wait;
+      const pendingDecision = !!req && !req.wait;
       if (!pendingDecision) {
         // Not a decision point (mid-animation, wait, etc.) — update header
         // so user sees we're tracking, then cache so we don't spam.
@@ -453,9 +457,9 @@ export default defineContentScript({
 
       try {
         const payload = translate(b);
-        const tag = b.request?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
+        const tag = req?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
         statsEl.textContent = `decision: ${tag} — requesting…`;
-        console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!b.request?.forceSwitch });
+        console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
         requestAnalysis(payload);
         lastKey = key;
       } catch (e: any) {
