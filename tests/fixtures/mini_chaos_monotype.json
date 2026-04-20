@@ -1,0 +1,23 @@
+{
+  "info": { "number of battles": 2000, "cutoff": 1630 },
+  "data": {
+    "Kingambit (Dark)": {
+      "Moves": { "suckerpunch": 0.98, "kowtowcleave": 0.91, "ironhead": 0.76, "swordsdance": 0.68 },
+      "Items": { "blackglasses": 0.81, "leftovers": 0.09, "airballoon": 0.06 },
+      "Abilities": { "supremeoverlord": 0.94, "defiant": 0.05 },
+      "Spreads": { "Adamant:252/252/4/0/0/0": 0.63 },
+      "Tera Types": { "Fairy": 0.42, "Flying": 0.28 },
+      "Raw count": 890,
+      "usage": 0.78
+    },
+    "Kingambit (Steel)": {
+      "Moves": { "ironhead": 0.97, "suckerpunch": 0.88, "knockoff": 0.71, "swordsdance": 0.52 },
+      "Items": { "rockyhelmet": 0.42, "leftovers": 0.31, "blackglasses": 0.15 },
+      "Abilities": { "supremeoverlord": 0.71, "defiant": 0.28 },
+      "Spreads": { "Adamant:252/0/252/0/4/0": 0.48 },
+      "Tera Types": { "Flying": 0.51, "Fairy": 0.20 },
+      "Raw count": 320,
+      "usage": 0.65
+    }
+  }
+}

@@ -108,9 +108,19 @@ class PriorsSource:
     ) -> ModalSet:
         chaos = self._ensure_loaded(format)
         data = chaos.get("data", {})
-        entry = data.get(species)
+
+        # Try typed key first (e.g. "Kingambit (Dark)")
+        entry = None
+        if team_type and format.startswith("gen9monotype"):
+            entry = data.get(f"{species} ({team_type})")
+        # Fall back to plain species
         if entry is None:
-            logger.warning("no chaos entry for %s in %s — returning neutral default", species, format)
+            entry = data.get(species)
+        if entry is None:
+            logger.warning(
+                "no chaos entry for %s (type=%s) in %s — returning neutral default",
+                species, team_type, format,
+            )
             return self._neutral_default(species)
 
         moves = _top_n_keys(entry.get("Moves", {}), 4)
