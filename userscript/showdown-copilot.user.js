@@ -420,7 +420,15 @@
     // redundant analysis and clobber the real stats display with "requesting…".
     const pendingDecision = !!b.request && !b.request.wait;
     if (!pendingDecision) {
-      // Leave the last-completed analysis visible; don't overwrite
+      // We're in a battle but no decision is pending. Clear stale "idle"
+      // header so the user knows the script sees the battle. Keep any
+      // previous analysis result (bestEl/pvEl/altsEl) on screen — don't
+      // overwrite with placeholder data.
+      const cur = hdrEl.textContent || '';
+      if (cur.includes('idle')) {
+        hdrEl.textContent = `Copilot — watching (turn ${t})`;
+        statsEl.textContent = 'Waiting for your next decision…';
+      }
       return;
     }
     if (!b.myPokemon || !b.myPokemon.length) return;
