@@ -259,7 +259,25 @@
           } catch (e) { /* partial line — ignore */ }
         });
       },
-      onload: () => { hdrEl.textContent = 'Copilot — ready'; inFlight = null; },
+      onload: (resp) => {
+        // GM_xmlhttpRequest in Tampermonkey MV3 sometimes delivers the full
+        // body at once via onload instead of incrementally via onprogress.
+        // Parse here too — lastLen ensures we don't double-render.
+        const text = resp.responseText || '';
+        if (text.length > lastLen) {
+          const chunk = text.slice(lastLen);
+          lastLen = text.length;
+          chunk.split('\n').forEach(line => {
+            if (!line.trim()) return;
+            try {
+              const u = JSON.parse(line);
+              renderUpdate(u);
+            } catch (e) { /* ignore */ }
+          });
+        }
+        hdrEl.textContent = 'Copilot — ready';
+        inFlight = null;
+      },
       onerror: () => {
         hdrEl.textContent = 'Copilot — error (engine down?)';
         bestEl.textContent = 'engine unreachable';
