@@ -218,17 +218,35 @@
   const pvEl = panel.querySelector('.sc-pv');
   const altsEl = panel.querySelector('.sc-alts');
 
+  // Detect if a "move" string is actually a switch target (species name).
+  // Engine outputs switches with the species name in ALL_CAPS_NO_SEP,
+  // e.g. KELDEORESOLUTE means "switch to Keldeo-Resolute". We match against
+  // my current team's species to decide.
+  function labelMove(moveStr) {
+    if (!moveStr) return '—';
+    const n = moveStr.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const team = (pageWin.app?.curRoom?.battle?.myPokemon || []);
+    for (const p of team) {
+      const s = (p.speciesForme || p.species || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (s && s === n) {
+        return `→ ${p.speciesForme || p.species}`;
+      }
+    }
+    // Regular move: just lowercase-pretty
+    return moveStr.toLowerCase();
+  }
+
   function renderUpdate(u) {
     const arrow = u.event === 'final' ? '▲' : '•';
     const conf = ((u.confidence || 0) * 100).toFixed(0);
-    bestEl.textContent = `${u.bestMove || '—'}  ${arrow} ${conf}%`;
+    bestEl.textContent = `${labelMove(u.bestMove)}  ${arrow} ${conf}%`;
     statsEl.textContent =
       `sims ${(u.sims || 0).toLocaleString()}  depth ${u.depth || 0}` +
       (u.error ? `  ERROR: ${u.error}` : '');
     pvEl.textContent = `PV: ${(u.pv || []).join(' → ') || '—'}`;
     altsEl.textContent = (u.alternatives || [])
       .slice(0, 3)
-      .map(a => `${a.move} ${((a.confidence || 0) * 100).toFixed(0)}%`)
+      .map(a => `${labelMove(a.move)} ${((a.confidence || 0) * 100).toFixed(0)}%`)
       .join(' | ') || '—';
   }
 
@@ -323,6 +341,16 @@
     const pendingDecision = !!b.request && !b.request.wait;
     if (!pendingDecision && t < 1) return;
     if (!b.myPokemon || !b.myPokemon.length) return;
+    // Team Preview: engine has no "pick a lead" mode — skip analysis and show
+    // a clear message instead of silently failing.
+    if (b.request && b.request.teamPreview) {
+      hdrEl.textContent = 'Copilot — team preview';
+      bestEl.textContent = 'pick a lead manually';
+      statsEl.textContent = 'MCTS lead-selection not yet implemented';
+      pvEl.textContent = 'PV: —';
+      altsEl.textContent = 'Follow-up: Phase 2 feature';
+      return;
+    }
     try {
       const payload = translate(b);
       // Tag the analysis so TUI shows what we're deciding for
