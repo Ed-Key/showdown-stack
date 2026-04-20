@@ -292,8 +292,10 @@
   }
 
   // Main loop ---------------------------------------------------------
-  let lastTurn = -1;
-  let lastRoomId = null;
+  // Trigger key combines room + turn + request-id (rqid). Showdown increments
+  // rqid on every decision prompt — move-select AND force-switch after faint —
+  // so we re-analyze whenever you're asked to decide, not just on new turns.
+  let lastKey = null;
 
   // Showdown's `app` object lives on the page's window, not Tampermonkey's
   // sandboxed window. unsafeWindow exposes the real page window.
@@ -304,27 +306,33 @@
     if (!rooms) return;
     const br = Object.values(rooms).find(r => r && r.battle && !r.battle.ended);
     if (!br) {
-      if (lastRoomId) {
+      if (lastKey) {
         hdrEl.textContent = 'Copilot — idle (no active battle)';
-        lastRoomId = null; lastTurn = -1;
+        lastKey = null;
       }
       return;
     }
     const b = br.battle;
     const t = b.turn || 0;
-    if (br.id !== lastRoomId || t !== lastTurn) {
-      lastRoomId = br.id;
-      lastTurn = t;
-      if (t >= 1 && b.myPokemon && b.myPokemon.length) {
-        try {
-          const payload = translate(b);
-          requestAnalysis(payload);
-        } catch (e) {
-          console.error('[sc] translate error', e);
-          hdrEl.textContent = 'Copilot — translate error';
-          bestEl.textContent = e.message || 'bad state';
-        }
-      }
+    const rqid = (b.request && b.request.rqid) || 0;
+    const key = `${br.id}:${t}:${rqid}`;
+    if (key === lastKey) return;
+    lastKey = key;
+    // Analyze whenever there's a pending decision (move or force-switch) or we
+    // see a real turn with a populated team. Skip when just spectating or idle.
+    const pendingDecision = !!b.request && !b.request.wait;
+    if (!pendingDecision && t < 1) return;
+    if (!b.myPokemon || !b.myPokemon.length) return;
+    try {
+      const payload = translate(b);
+      // Tag the analysis so TUI shows what we're deciding for
+      const tag = b.request?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
+      statsEl.textContent = `decision: ${tag} — requesting…`;
+      requestAnalysis(payload);
+    } catch (e) {
+      console.error('[sc] translate error', e);
+      hdrEl.textContent = 'Copilot — translate error';
+      bestEl.textContent = e.message || 'bad state';
     }
   }, POLL_MS);
 
