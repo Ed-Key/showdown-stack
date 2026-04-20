@@ -20,9 +20,13 @@ class EngineUpdate:
     pv: list[str] = field(default_factory=list)
     alternatives: list[dict[str, Any]] = field(default_factory=list)
     is_final: bool = False
+    error: str | None = None
 
     @classmethod
     def from_json(cls, obj: dict[str, Any]) -> "EngineUpdate":
+        event = obj.get("event")
+        # Terminal events: "final" (normal completion) or "error" (engine-reported failure).
+        # Both stop the stream — callers check .error to distinguish success from failure.
         return cls(
             best_move=obj.get("bestMove", ""),
             confidence=float(obj.get("confidence", 0.0)),
@@ -30,7 +34,8 @@ class EngineUpdate:
             depth=int(obj.get("depth", 0)),
             pv=list(obj.get("pv", [])),
             alternatives=list(obj.get("alternatives", [])),
-            is_final=(obj.get("event") == "final"),
+            is_final=(event in ("final", "error")),
+            error=obj.get("message") if event == "error" else None,
         )
 
 

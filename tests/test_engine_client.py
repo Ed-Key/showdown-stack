@@ -28,5 +28,44 @@ async def test_engine_client_yields_parsed_updates(httpx_mock: HTTPXMock):
     assert len(updates) == 3
     assert updates[0].best_move == "tackle"
     assert updates[0].confidence == 0.5
+    assert updates[0].is_final is False
+    assert updates[1].is_final is False
     assert updates[-1].is_final
+    assert updates[-1].error is None
     assert updates[-1].sims == 5000
+
+
+async def test_engine_client_handles_error_event_as_terminal(httpx_mock: HTTPXMock):
+    body = (
+        json.dumps({"event": "error", "message": "failed to parse battle state"}) + "\n"
+    )
+    httpx_mock.add_response(
+        url="http://localhost:7267/analyze/stream",
+        content=body.encode(),
+    )
+    client = EngineClient(base_url="http://localhost:7267")
+    updates: list[EngineUpdate] = []
+    async for u in client.stream_analyze({}, time_limit_ms=1000):
+        updates.append(u)
+    assert len(updates) == 1
+    assert updates[0].is_final
+    assert updates[0].error == "failed to parse battle state"
+
+
+async def test_engine_client_skips_malformed_json_line(httpx_mock: HTTPXMock):
+    body = (
+        "not valid json\n"
+        + json.dumps({"event": "final", "bestMove": "ember", "confidence": 0.6, "sims": 100, "depth": 4}) + "\n"
+    )
+    httpx_mock.add_response(
+        url="http://localhost:7267/analyze/stream",
+        content=body.encode(),
+    )
+    client = EngineClient(base_url="http://localhost:7267")
+    updates: list[EngineUpdate] = []
+    async for u in client.stream_analyze({}, time_limit_ms=1000):
+        updates.append(u)
+    # Bad line skipped, good line yielded
+    assert len(updates) == 1
+    assert updates[0].best_move == "ember"
+    assert updates[0].is_final
