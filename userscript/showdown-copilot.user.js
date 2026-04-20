@@ -8,6 +8,7 @@
 // @connect      localhost
 // @connect      127.0.0.1
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -276,8 +277,12 @@
   let lastTurn = -1;
   let lastRoomId = null;
 
+  // Showdown's `app` object lives on the page's window, not Tampermonkey's
+  // sandboxed window. unsafeWindow exposes the real page window.
+  const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
   setInterval(() => {
-    const rooms = window.app && window.app.rooms;
+    const rooms = pageWin.app && pageWin.app.rooms;
     if (!rooms) return;
     const br = Object.values(rooms).find(r => r && r.battle && !r.battle.ended);
     if (!br) {
