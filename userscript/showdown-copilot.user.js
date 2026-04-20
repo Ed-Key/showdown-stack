@@ -15,6 +15,10 @@
 (function () {
   'use strict';
 
+  // Showdown's `app` / `Dex` live on the page's window, not Tampermonkey's
+  // sandboxed window. unsafeWindow exposes the real page window.
+  const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+
   const ENGINE_URL = 'http://localhost:7267/analyze/stream';
   const POLL_MS = 500;
   const ANALYSIS_TIME_MS = 6000;
@@ -64,6 +68,29 @@
     return (s || '').toString().toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
+  // Resolve types for any species. Tries the local hardcoded table first
+  // (common cases, fast), then falls back to Showdown's own Dex which has
+  // every species. Without this, unknown species end up with types=[] and
+  // the engine can't know about immunities — e.g., Gliscor (Ground/Flying)
+  // looked like a clean Earthquake target because the Flying type was missing.
+  function resolveTypes(speciesName) {
+    const n = norm(speciesName);
+    if (TYPES[n]) return TYPES[n];
+    try {
+      const dex = pageWin.Dex || (pageWin.BattlePokedex && pageWin);
+      if (pageWin.Dex && pageWin.Dex.species) {
+        const sp = pageWin.Dex.species.get(speciesName);
+        if (sp && sp.types && sp.types.length) return sp.types;
+      }
+      // Fallback to BattlePokedex (older API surface on play.pokemonshowdown.com)
+      if (pageWin.BattlePokedex) {
+        const entry = pageWin.BattlePokedex[n] || pageWin.BattlePokedex[speciesName];
+        if (entry && entry.types) return entry.types;
+      }
+    } catch (e) { /* fall through to empty */ }
+    return [];
+  }
+
   function padMoves(arr) {
     const m = arr.slice(0, 4);
     while (m.length < 4) m.push({ id: 'none', pp: 0 });
@@ -74,7 +101,7 @@
     const species = norm(p.speciesForme || p.species);
     return {
       species, level: p.level || 100,
-      types: TYPES[species] || [],
+      types: resolveTypes(p.speciesForme || p.species),
       hp: p.hp || 0, maxhp: p.maxhp || 1,
       ability: norm(p.ability || p.baseAbility || 'none'),
       item: norm(p.item || 'none'),
@@ -94,12 +121,13 @@
   }
 
   function buildOppPokemon(p) {
-    const species = norm(p.speciesForme || p.species?.name || p.species);
+    const speciesRaw = p.speciesForme || (p.species && p.species.name) || p.species;
+    const species = norm(speciesRaw);
     const hpPct = p.hp || 0;
     const revealed = (p.moveTrack || []).map(m => ({ id: norm(m[0]), pp: 8 }));
     return {
       species, level: p.level || 100,
-      types: TYPES[species] || [],
+      types: resolveTypes(speciesRaw),
       hp: Math.max(1, Math.round(hpPct * 2.5)),
       maxhp: 250,
       ability: norm(p.ability || p.baseAbility || 'none'),
@@ -314,10 +342,6 @@
   // rqid on every decision prompt — move-select AND force-switch after faint —
   // so we re-analyze whenever you're asked to decide, not just on new turns.
   let lastKey = null;
-
-  // Showdown's `app` object lives on the page's window, not Tampermonkey's
-  // sandboxed window. unsafeWindow exposes the real page window.
-  const pageWin = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
   setInterval(() => {
     const rooms = pageWin.app && pageWin.app.rooms;
