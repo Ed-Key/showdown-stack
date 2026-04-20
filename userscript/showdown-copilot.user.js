@@ -398,10 +398,31 @@
   // so we re-analyze whenever you're asked to decide, not just on new turns.
   let lastKey = null;
 
+  let debugLogOnce = false;
   setInterval(() => {
     const rooms = pageWin.app && pageWin.app.rooms;
     if (!rooms) return;
-    const br = Object.values(rooms).find(r => r && r.battle && !r.battle.ended);
+    // Prefer curRoom if it's a battle — more accurate than iteration order.
+    // Fall back to finding any non-ended battle room.
+    const cur = pageWin.app.curRoom;
+    let br = null;
+    if (cur && cur.battle && !cur.battle.ended) {
+      br = cur;
+    } else {
+      br = Object.values(rooms).find(r => r && r.battle && !r.battle.ended && (r.battle.turn || 0) >= 1);
+      // If still nothing, fall back to any non-ended battle (for pre-turn states)
+      if (!br) {
+        br = Object.values(rooms).find(r => r && r.battle && !r.battle.ended);
+      }
+    }
+    // One-shot debug when we first miss detection — helps diagnose future bugs
+    if (!br && !debugLogOnce) {
+      debugLogOnce = true;
+      console.log('[sc] rooms snapshot:', Object.keys(rooms).map(k => {
+        const r = rooms[k];
+        return { id: k, hasBattle: !!r?.battle, ended: r?.battle?.ended, turn: r?.battle?.turn };
+      }));
+    }
     if (!br) {
       if (lastKey) {
         hdrEl.textContent = 'Copilot — idle (no active battle)';
