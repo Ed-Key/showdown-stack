@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.widgets import Header, Footer, Static, Log
 
 from showdown_copilot.engine_client import EngineUpdate
@@ -29,7 +29,7 @@ class CopilotApp(App):
         yield Static("PV: —", id="pv")
         yield Static("alternatives: —", id="alternatives")
         yield Static("assumed sets: —", id="assumed-sets")
-        yield Log(id="turn-log")
+        yield Log(id="turn-log", max_lines=2000)
         yield Footer()
 
     def on_mount(self) -> None:
