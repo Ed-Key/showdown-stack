@@ -407,13 +407,12 @@ export default defineContentScript({
       const rqid = b.request?.rqid ?? 0;
       const key = `${br.id}:${t}:${rqid}`;
       if (key === lastKey) return;
-      lastKey = key;
 
       // Team Preview: run the fast heuristic (no engine call)
       if (b.request?.teamPreview) {
         const myTeam = b.myPokemon || [];
         const oppTeam = b.farSide?.pokemon || [];
-        if (myTeam.length && oppTeam.length) {
+        if (myTeam.length && oppTeam.length >= 1) {
           const ranked = myTeam
             .map((m: any) => ({
               name: m.speciesForme || m.species,
@@ -423,26 +422,31 @@ export default defineContentScript({
           const best = ranked[0];
           hdrEl.textContent = 'Copilot — team preview';
           bestEl.textContent = `→ ${best.name}`;
-          statsEl.textContent = `matchup score ${best.score.toFixed(1)} across 6 opps`;
+          statsEl.textContent = `matchup score ${best.score.toFixed(1)} across ${oppTeam.length} opps`;
           pvEl.textContent = 'PV: heuristic (not MCTS)';
           altsEl.textContent = ranked
             .slice(1, 4)
             .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
             .join(' | ');
+          lastKey = key; // done — opp data was ready
         } else {
+          // Not ready: opp preview not loaded yet. DON'T cache — retry next poll.
           hdrEl.textContent = 'Copilot — team preview';
-          bestEl.textContent = 'waiting for opponent preview';
-          statsEl.textContent = '';
+          bestEl.textContent = 'waiting for opponent preview…';
+          statsEl.textContent = `my team: ${myTeam.length}, opp team: ${oppTeam.length}`;
         }
         return;
       }
 
       const pendingDecision = !!b.request && !b.request.wait;
       if (!pendingDecision) {
-        if (hdrEl.textContent.includes('idle')) {
-          hdrEl.textContent = `Copilot — watching (turn ${t})`;
+        // Not a decision point (mid-animation, wait, etc.) — update header
+        // so user sees we're tracking, then cache so we don't spam.
+        hdrEl.textContent = `Copilot — watching (turn ${t})`;
+        if (!statsEl.textContent.startsWith('sims ')) {
           statsEl.textContent = 'Waiting for your next decision…';
         }
+        lastKey = key;
         return;
       }
       if (!b.myPokemon?.length) return;
@@ -451,11 +455,14 @@ export default defineContentScript({
         const payload = translate(b);
         const tag = b.request?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
         statsEl.textContent = `decision: ${tag} — requesting…`;
+        console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!b.request?.forceSwitch });
         requestAnalysis(payload);
+        lastKey = key;
       } catch (e: any) {
         console.error('[sc] translate error', e);
         hdrEl.textContent = 'Copilot — translate error';
         bestEl.textContent = e.message || 'bad state';
+        lastKey = key;
       }
     }, POLL_MS);
 
