@@ -78,3 +78,43 @@ def test_to_engine_json_returns_dict_with_expected_top_keys():
     assert "sideTwo" in result
     assert "weather" in result
     assert "terrain" in result
+
+
+def test_on_reveal_replaces_last_move_when_new_one_seen():
+    priors = StubPriors({"garchomp": _modal(
+        "garchomp", moves=["earthquake", "dragontail", "stealthrock", "stoneedge"]
+    )})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    sa.on_reveal("Garchomp", revealed_move="Swords Dance")
+    assert "swordsdance" in sa._opp_specs["garchomp"].moves
+    assert "stoneedge" not in sa._opp_specs["garchomp"].moves
+
+
+def test_on_reveal_ignores_already_known_move():
+    priors = StubPriors({"garchomp": _modal(
+        "garchomp", moves=["earthquake", "dragontail", "stealthrock", "stoneedge"]
+    )})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    before = list(sa._opp_specs["garchomp"].moves)
+    sa.on_reveal("Garchomp", revealed_move="Earthquake")
+    assert sa._opp_specs["garchomp"].moves == before
+
+
+def test_on_reveal_updates_item_and_ability():
+    priors = StubPriors({"garchomp": _modal("garchomp", item="leftovers", ability="sandveil")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    sa.on_reveal("Garchomp", revealed_item="Choice Scarf", revealed_ability="Rough Skin")
+    assert sa._opp_specs["garchomp"].item == "choicescarf"
+    assert sa._opp_specs["garchomp"].ability == "roughskin"
+
+
+def test_on_reveal_unknown_species_is_noop():
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    # Not in _opp_specs — must not raise
+    sa.on_reveal("Kingambit", revealed_move="Sucker Punch")
+    assert "kingambit" not in sa._opp_specs
