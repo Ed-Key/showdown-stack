@@ -16,9 +16,11 @@ class CopilotSpectator(Player):
         super().__init__(*args, **kwargs)
         self._coaching_user = coaching_user.lower()
 
-    def choose_move(self, battle):
-        """Spectators never submit moves. Returns a default order (no-op)."""
-        return self.choose_default_move()
+    def choose_move(self, battle):  # required: Player declares this abstract
+        raise NotImplementedError(
+            "CopilotSpectator never submits moves; "
+            "_handle_battle_request no-op should prevent this path"
+        )
 
     async def _handle_battle_request(self, battle, **_):
         """Spectators never receive |request|. Defensive no-op in case we do."""
@@ -42,10 +44,13 @@ class CopilotSpectator(Player):
                     self._coaching_user, battle_tag, p1, p2,
                 )
 
-    def _handle_battle_message(self, split_messages):
-        # Patch roles before poke-env dispatches any ownership-sensitive logic
+    async def _handle_battle_message(self, split_messages):
+        # Patch before + after super — "before" covers the common case where
+        # _players is already populated from earlier messages; "after" covers
+        # the first batch of messages that introduces the `|player|` lines.
         self._patch_player_roles()
-        super()._handle_battle_message(split_messages)
+        await super()._handle_battle_message(split_messages)
+        self._patch_player_roles()
 
     async def join_battle(self, room_id: str) -> None:
         """Ask Showdown to place us in a battle room as a spectator."""

@@ -1,6 +1,9 @@
-from unittest.mock import MagicMock, AsyncMock
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
+
+from poke_env.player import Player
 
 from showdown_copilot.spectator import CopilotSpectator
 
@@ -43,3 +46,26 @@ def test_coaching_user_not_in_room_logs_warning(caplog):
         spec._patch_player_roles()
 
     assert any("Mariga" in rec.message or "mariga" in rec.message.lower() for rec in caplog.records)
+
+
+def test_handle_battle_message_is_async_and_awaits_super():
+    """Regression guard: the override must be async and must await super."""
+    spec = CopilotSpectator.__new__(CopilotSpectator)
+    spec._coaching_user = "mariga"
+    spec._battles = {"battle-1": make_mock_battle("Mariga", "igboC")}
+
+    with patch.object(Player, "_handle_battle_message", new=AsyncMock(return_value=None)) as super_mock:
+        result = spec._handle_battle_message([["dummy"]])
+        assert asyncio.iscoroutine(result), "override must return a coroutine"
+        asyncio.run(result)
+
+    super_mock.assert_awaited_once()
+    assert spec._battles["battle-1"]._player_role == "p1"
+
+
+def test_choose_move_raises_not_implemented():
+    """Regression guard: choose_move must never silently submit a move."""
+    spec = CopilotSpectator.__new__(CopilotSpectator)
+    spec._coaching_user = "mariga"
+    with pytest.raises(NotImplementedError):
+        spec.choose_move(None)
