@@ -1,6 +1,7 @@
 // Showdown Copilot — content script running in MAIN world (page context).
 // Reads Showdown's app / Dex globals directly, fetches the local poke-engine
 // /analyze/stream endpoint, streams NDJSON updates into a floating panel.
+import { priorMovesForSpecies } from '../utils/chaos-priors';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -60,6 +61,21 @@ export default defineContentScript({
       while (m.length < 4) m.push({ id: 'none', pp: 0 });
       return m;
     };
+
+    function padMovesWithPriors(revealed: any[], speciesDisplay: string) {
+      const existingIds = new Set(revealed.map((m: any) => m.id));
+      const priors = priorMovesForSpecies(speciesDisplay);
+      const merged: any[] = revealed.slice(0, 4);
+      for (const pm of priors) {
+        if (merged.length >= 4) break;
+        if (!existingIds.has(pm)) {
+          merged.push({ id: pm, pp: 8 });
+          existingIds.add(pm);
+        }
+      }
+      while (merged.length < 4) merged.push({ id: 'none', pp: 0 });
+      return merged;
+    }
 
     function resolveTypes(speciesName: string): string[] {
       try {
@@ -182,7 +198,7 @@ export default defineContentScript({
         speed: computed.stats.spe,
         status: STATUS[(p.status || '').toLowerCase()] || 'None',
         restTurns: 0, sleepTurns: 0, weightKg: 0.0,
-        moves: padMoves(revealed),
+        moves: padMovesWithPriors(revealed, speciesRaw),
         terastallized: !!p.terastallized,
         teraType: '',
       };
