@@ -518,6 +518,10 @@ export default defineContentScript({
       statsEl.textContent = 'heuristic — engine had no switch in top-K';
     }
 
+    // Test hook: lets the controller synthetically trigger the force-switch
+    // override from the console/MCP without waiting for a live force switch.
+    (win as any).__scTestForceSwitch = (u: any) => applyForceSwitchOverride(u);
+
     function handleEngineUpdate(u: any, record: DecisionRecord | null) {
       renderUpdate(u);
       if (!record) return;
