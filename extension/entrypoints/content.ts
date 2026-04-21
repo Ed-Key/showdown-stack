@@ -291,6 +291,90 @@ export default defineContentScript({
     const pvEl = panel.querySelector<HTMLDivElement>('.sc-pv')!;
     const altsEl = panel.querySelector<HTMLDivElement>('.sc-alts')!;
 
+    // ---- Battle history (for post-game analysis) ------------------------
+    type DecisionRecord = {
+      battleId: string;
+      turn: number;
+      rqid: number;
+      tStartMs: number;
+      tEndMs?: number;
+      forceSwitch: boolean;
+      state: any;
+      updates: any[];
+      final?: any;
+    };
+    type BattleResult = {
+      battleId: string;
+      winner?: string;
+      turns: number;
+      endedAtMs: number;
+    };
+    const scHistory: DecisionRecord[] = [];
+    const scResults: BattleResult[] = [];
+    let lastEndedBattleId: string | null = null;
+
+    (win as any).__scHistory = () => scHistory;
+    (win as any).__scResults = () => scResults;
+    (win as any).__scSummary = () =>
+      scHistory.map(r => ({
+        battle: r.battleId,
+        turn: r.turn,
+        myActive: r.state?.myActive,
+        myHp: r.state?.my?.activeHpPct,
+        oppActive: r.state?.oppActive,
+        oppHp: r.state?.opp?.activeHpPct,
+        pick: r.final?.bestMove,
+        conf: r.final ? Math.round((r.final.confidence || 0) * 100) + '%' : null,
+        sims: r.final?.sims,
+        depth: r.final?.depth,
+        took: r.tEndMs ? r.tEndMs - r.tStartMs + 'ms' : null,
+        pv: r.final?.pv,
+      }));
+    (win as any).__scDumpBattle = () => JSON.stringify(scHistory, null, 2);
+
+    function snapshotSide(s: any) {
+      const active = s?.active?.[0];
+      const mvTrack = (active?.moveTrack || []).map((m: [string, number]) => m[0]);
+      return {
+        activeSpecies: active?.species?.name || active?.speciesForme || null,
+        activeHp: active?.hp ?? null,
+        activeMaxhp: active?.maxhp ?? null,
+        activeHpPct: active?.maxhp
+          ? Math.round(((active.hp || 0) / active.maxhp) * 100)
+          : null,
+        status: active?.status || null,
+        item: active?.item || null,
+        ability: active?.ability || active?.baseAbility || null,
+        boosts: active?.boosts || {},
+        revealedMoves: mvTrack,
+        team: (s?.pokemon || []).map((p: any) => ({
+          species: p.species?.name || p.speciesForme || p.species,
+          fainted: !!p.fainted,
+          hpPct: p.maxhp ? Math.round(((p.hp || 0) / p.maxhp) * 100) : null,
+          status: p.status || null,
+        })),
+        sideConditions: s?.sideConditions || {},
+      };
+    }
+
+    function snapshotState(b: any) {
+      return {
+        turn: b.turn,
+        weather: b.weather || 'none',
+        pseudoWeather: (b.pseudoWeather || []).map((pw: any) => pw[0]),
+        myActive: b.mySide?.active?.[0]?.species?.name
+          || b.mySide?.active?.[0]?.speciesForme || null,
+        oppActive: b.farSide?.active?.[0]?.species?.name
+          || b.farSide?.active?.[0]?.speciesForme || null,
+        my: snapshotSide(b.mySide),
+        opp: snapshotSide(b.farSide),
+      };
+    }
+
+    function pct(v: number | undefined) {
+      return ((v || 0) * 100).toFixed(0) + '%';
+    }
+
     function labelMove(moveStr: string): string {
       if (!moveStr) return '—';
       const n = norm(moveStr);
@@ -320,7 +404,28 @@ export default defineContentScript({
     // ---- engine call with native fetch streaming ------------------------
     let abortCtrl: AbortController | null = null;
 
-    async function requestAnalysis(payload: any) {
+    function handleEngineUpdate(u: any, record: DecisionRecord | null) {
+      renderUpdate(u);
+      if (!record) return;
+      record.updates.push(u);
+      if (u.event === 'final' || u.error) {
+        record.final = u;
+        record.tEndMs = Date.now();
+        const alts = (u.alternatives || [])
+          .slice(0, 3)
+          .map((a: any) => `${a.move} ${pct(a.confidence)}`)
+          .join(', ') || 'none';
+        const pv = (u.pv || []).join(' → ') || '—';
+        console.log(
+          `[sc:battle] T${record.turn} FINAL → ${u.bestMove} ` +
+          `(${pct(u.confidence)}) | sims ${(u.sims || 0).toLocaleString()} ` +
+          `depth ${u.depth || 0} | ${record.tEndMs! - record.tStartMs}ms`
+        );
+        console.log(`[sc:battle] T${record.turn} PV: ${pv} | alts: ${alts}`);
+      }
+    }
+
+    async function requestAnalysis(payload: any, record: DecisionRecord | null) {
       if (abortCtrl) abortCtrl.abort();
       abortCtrl = new AbortController();
       const myCtrl = abortCtrl;
@@ -348,12 +453,12 @@ export default defineContentScript({
           for (const line of lines) {
             if (!line.trim()) continue;
             try {
-              renderUpdate(JSON.parse(line));
+              handleEngineUpdate(JSON.parse(line), record);
             } catch {}
           }
         }
         if (buffer.trim()) {
-          try { renderUpdate(JSON.parse(buffer)); } catch {}
+          try { handleEngineUpdate(JSON.parse(buffer), record); } catch {}
         }
         hdrEl.textContent = 'Copilot — ready';
       } catch (e: any) {
@@ -368,10 +473,40 @@ export default defineContentScript({
     // ---- main loop -------------------------------------------------------
     let lastKey: string | null = null;
     let debugLogOnce = false;
+    // Debug: log only on transitions so console isn't spammed at 2Hz.
+    let lastBranch: string | null = null;
+    let lastReqSig: string | null = null;
+    const trace = (branch: string, extra?: Record<string, unknown>) => {
+      if (branch === lastBranch) return;
+      lastBranch = branch;
+      console.log(`[sc:trace] ${branch}`, extra ?? {});
+    };
+    // Expose a live probe so the user can run `window.__scDebug()` in
+    // DevTools and see exactly what the loop sees on demand.
+    (win as any).__scDebug = () => {
+      const rooms = win.app?.rooms;
+      const cur = win.app?.curRoom;
+      const br = cur?.battle ? cur : null;
+      const b = br?.battle;
+      const req = br?.request || b?.request;
+      return {
+        lastKey, lastBranch, lastReqSig,
+        roomIds: rooms ? Object.keys(rooms) : null,
+        curRoomId: cur?.id,
+        turn: b?.turn,
+        ended: b?.ended,
+        myPokemonLen: b?.myPokemon?.length ?? null,
+        farSidePokemonLen: b?.farSide?.pokemon?.length ?? null,
+        req: req ? {
+          rqid: req.rqid, wait: req.wait, teamPreview: req.teamPreview,
+          forceSwitch: req.forceSwitch, hasActive: !!req.active,
+        } : null,
+      };
+    };
 
     setInterval(() => {
       const rooms = win.app?.rooms;
-      if (!rooms) return;
+      if (!rooms) { trace('no-rooms'); return; }
       // Prefer app.curRoom — that's the battle the user is actually viewing
       const cur = win.app.curRoom;
       let br: any = null;
@@ -400,17 +535,45 @@ export default defineContentScript({
           hdrEl.textContent = 'Copilot — idle (no active battle)';
           lastKey = null;
         }
+        trace('no-battle-room');
         return;
       }
       const b = br.battle;
       const t = b.turn || 0;
+      // Detect battle ending so we can log an end-of-battle summary exactly once.
+      if (b.ended && lastEndedBattleId !== br.id) {
+        lastEndedBattleId = br.id;
+        const myName = b.mySide?.name || 'you';
+        const oppName = b.farSide?.name || 'opp';
+        const winner = b.winner || null;
+        const result: BattleResult = {
+          battleId: br.id, winner: winner || undefined,
+          turns: t, endedAtMs: Date.now(),
+        };
+        scResults.push(result);
+        console.log(
+          `[sc:battle] END ${br.id} — ${winner
+            ? (winner === myName ? 'WIN' : winner === oppName ? 'LOSS' : `winner=${winner}`)
+            : 'draw/unknown'} in ${t} turns`
+        );
+      }
       // Showdown stores the current decision request on the room, not on
       // the battle object. b.request is usually null; br.request is the
       // real source of truth for team preview / move select / force switch.
       const req = br.request || b.request;
       const rqid = req?.rqid ?? 0;
       const key = `${br.id}:${t}:${rqid}`;
-      if (key === lastKey) return;
+      // Log every distinct (rqid, wait, teamPreview, forceSwitch) tuple we see
+      // so we can tell if Showdown ever emits a wait-request with the same
+      // rqid as the real move-select (the prime suspect for turn 1 skipping).
+      const reqSig = req
+        ? `rqid=${req.rqid} wait=${!!req.wait} tp=${!!req.teamPreview} fs=${!!req.forceSwitch} t=${t}`
+        : `no-req t=${t}`;
+      if (reqSig !== lastReqSig) {
+        lastReqSig = reqSig;
+        console.log('[sc:req]', reqSig, { key, lastKey });
+      }
+      if (key === lastKey) { trace(`cache-skip key=${key}`); return; }
 
       // Team Preview: run the fast heuristic (no engine call)
       if (req?.teamPreview) {
@@ -445,22 +608,47 @@ export default defineContentScript({
       const pendingDecision = !!req && !req.wait;
       if (!pendingDecision) {
         // Not a decision point (mid-animation, wait, etc.) — update header
-        // so user sees we're tracking, then cache so we don't spam.
+        // so user sees we're tracking. DO NOT cache lastKey here: Showdown
+        // emits a wait-request and then clears `wait` on the SAME rqid, so
+        // caching makes the next poll (which IS a real decision) silent-skip
+        // forever via the key===lastKey branch. Re-enter every poll; the
+        // text updates are idempotent.
         hdrEl.textContent = `Copilot — watching (turn ${t})`;
         if (!statsEl.textContent.startsWith('sims ')) {
           statsEl.textContent = 'Waiting for your next decision…';
         }
-        lastKey = key;
+        trace(`wait-req (not cached) key=${key}`, { reqSig });
         return;
       }
-      if (!b.myPokemon?.length) return;
+      if (!b.myPokemon?.length) {
+        trace(`no-mypokemon key=${key}`);
+        return;
+      }
 
       try {
         const payload = translate(b);
         const tag = req?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
         statsEl.textContent = `decision: ${tag} — requesting…`;
+        const record: DecisionRecord = {
+          battleId: br.id,
+          turn: t, rqid,
+          tStartMs: Date.now(),
+          forceSwitch: !!req?.forceSwitch,
+          state: snapshotState(b),
+          updates: [],
+        };
+        scHistory.push(record);
+        const hazMy = Object.entries(record.state.my.sideConditions || {})
+          .filter(([_, v]: any) => v).map(([k]) => k).join(',') || 'none';
+        const hazOpp = Object.entries(record.state.opp.sideConditions || {})
+          .filter(([_, v]: any) => v).map(([k]) => k).join(',') || 'none';
+        console.log(
+          `[sc:battle] T${t} PRE (${tag}) — ${record.state.myActive} ` +
+          `${record.state.my.activeHpPct}% vs ${record.state.oppActive} ${record.state.opp.activeHpPct}% ` +
+          `| weather=${record.state.weather} | hazards my=${hazMy} opp=${hazOpp}`
+        );
         console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
-        requestAnalysis(payload);
+        requestAnalysis(payload, record);
         lastKey = key;
       } catch (e: any) {
         console.error('[sc] translate error', e);
