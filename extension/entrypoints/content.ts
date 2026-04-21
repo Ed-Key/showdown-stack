@@ -460,6 +460,64 @@ export default defineContentScript({
     // ---- engine call with native fetch streaming ------------------------
     let abortCtrl: AbortController | null = null;
 
+    // When forceSwitch is true, the engine's bestMove may be a move like
+    // "THUNDERPUNCH" that the user can't legally pick — Showdown only accepts
+    // a Pokemon. Filter engine response to switches; fall back to leadScore
+    // heuristic vs opp's current active if engine surfaced no switches in
+    // its top-K.
+    function applyForceSwitchOverride(u: any) {
+      const b = win.app?.curRoom?.battle;
+      if (!b) return;
+      const myTeam = b.myPokemon || [];
+      const findSpecies = (moveStr: string): string | null => {
+        if (!moveStr) return null;
+        const n = norm(moveStr);
+        for (const p of myTeam) {
+          if (norm(p.speciesForme || p.species) === n) {
+            return p.speciesForme || p.species;
+          }
+        }
+        return null;
+      };
+      const allPicks = [
+        { move: u.bestMove, confidence: u.confidence || 0 },
+        ...((u.alternatives || []).map((a: any) => ({ move: a.move, confidence: a.confidence || 0 }))),
+      ];
+      const switchesFromEngine = allPicks
+        .map((p: any) => ({ species: findSpecies(p.move), confidence: p.confidence }))
+        .filter((s: any) => s.species);
+      if (switchesFromEngine.length) {
+        const best = switchesFromEngine[0];
+        hdrEl.textContent = 'Copilot — force switch';
+        bestEl.textContent = `→ ${best.species}  ▲ ${pct(best.confidence)}`;
+        altsEl.textContent = switchesFromEngine.slice(1, 4)
+          .map((s: any) => `→ ${s.species} ${pct(s.confidence)}`)
+          .join(' | ') || '—';
+        statsEl.textContent = 'engine-ranked switch';
+        return;
+      }
+      // Heuristic fallback: leadScore vs opp's current active
+      const myActive = b.mySide?.active?.[0];
+      const myActiveSpecies = norm(myActive?.species?.name || myActive?.speciesForme || '');
+      const oppActive = b.farSide?.active?.[0];
+      if (!oppActive) return;
+      const candidates = myTeam
+        .filter((p: any) => !p.fainted && norm(p.speciesForme || p.species) !== myActiveSpecies)
+        .map((m: any) => ({
+          species: m.speciesForme || m.species,
+          score: leadScore(m, [oppActive]),
+        }))
+        .sort((a: any, b: any) => b.score - a.score);
+      if (!candidates.length) return;
+      const best = candidates[0];
+      hdrEl.textContent = 'Copilot — force switch (heuristic)';
+      bestEl.textContent = `→ ${best.species}  [heuristic ${best.score.toFixed(1)}]`;
+      altsEl.textContent = candidates.slice(1, 4)
+        .map((c: any) => `${c.species} (${c.score.toFixed(1)})`)
+        .join(' | ') || '—';
+      statsEl.textContent = 'heuristic — engine had no switch in top-K';
+    }
+
     function handleEngineUpdate(u: any, record: DecisionRecord | null) {
       renderUpdate(u);
       if (!record) return;
@@ -467,6 +525,10 @@ export default defineContentScript({
       if (u.event === 'final' || u.error) {
         record.final = u;
         record.tEndMs = Date.now();
+        // Force-switch post-processing: panel must recommend a Pokemon.
+        if (record.forceSwitch && u.bestMove && !u.error) {
+          applyForceSwitchOverride(u);
+        }
         const alts = (u.alternatives || [])
           .slice(0, 3)
           .map((a: any) => `${a.move} ${pct(a.confidence)}`)
@@ -475,7 +537,8 @@ export default defineContentScript({
         console.log(
           `[sc:battle] T${record.turn} FINAL → ${u.bestMove} ` +
           `(${pct(u.confidence)}) | sims ${(u.sims || 0).toLocaleString()} ` +
-          `depth ${u.depth || 0} | ${record.tEndMs! - record.tStartMs}ms`
+          `depth ${u.depth || 0} | ${record.tEndMs! - record.tStartMs}ms` +
+          (record.forceSwitch ? ' [forceSwitch: post-filtered]' : '')
         );
         console.log(`[sc:battle] T${record.turn} PV: ${pv} | alts: ${alts}`);
       }
