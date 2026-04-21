@@ -217,13 +217,49 @@ export default defineContentScript({
       };
     }
 
-    function buildSide(mons: any[], activeIdx: number, boosts: any) {
+    // Map Showdown's lowercased effect IDs to poke-engine's camelCase keys.
+    const SC_KEY_MAP: Record<string, keyof typeof DEFAULT_SC> = {
+      spikes: 'spikes',
+      stealthrock: 'stealthRock',
+      stickyweb: 'stickyWeb',
+      toxicspikes: 'toxicSpikes',
+      reflect: 'reflect',
+      lightscreen: 'lightScreen',
+      auroraveil: 'auroraVeil',
+      tailwind: 'tailwind',
+      safeguard: 'safeguard',
+      mist: 'mist',
+      luckychant: 'luckyChant',
+      healingwish: 'healingWish',
+      lunardance: 'lunarDance',
+      matblock: 'matBlock',
+      quickguard: 'quickGuard',
+      wideguard: 'wideGuard',
+      craftyshield: 'craftyShield',
+    };
+
+    function translateSideConditions(raw: any) {
+      const out = { ...DEFAULT_SC };
+      if (!raw) return out;
+      // Showdown format: { "spikes": [displayName, layerCount, duration, ...] }
+      for (const [key, val] of Object.entries(raw)) {
+        const engineKey = SC_KEY_MAP[key];
+        if (!engineKey) continue;
+        let count = 1;
+        if (Array.isArray(val)) count = (val as any[])[1] || 1;
+        else if (typeof val === 'number') count = val;
+        out[engineKey] = count;
+      }
+      return out;
+    }
+
+    function buildSide(mons: any[], activeIdx: number, boosts: any, rawSide: any) {
       const out = mons.slice();
       while (out.length < 6) out.push(emptyPokemon());
       return {
         pokemon: out.slice(0, 6),
         activeIndex: activeIdx,
-        sideConditions: { ...DEFAULT_SC },
+        sideConditions: translateSideConditions(rawSide?.sideConditions),
         volatileStatuses: [],
         boosts: {
           attack: boosts?.atk || 0,
@@ -257,8 +293,8 @@ export default defineContentScript({
       }
       const weather = (b.weather || '').toLowerCase();
       return {
-        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts),
-        sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts),
+        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide),
+        sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide),
         weather: {
           weatherType: weather || 'none',
           turnsRemaining: b.weatherTimeLeft || -1,
