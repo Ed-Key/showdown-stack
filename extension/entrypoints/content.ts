@@ -81,11 +81,14 @@ export default defineContentScript({
       try {
         if (win.Dex && win.Dex.species) {
           const sp = win.Dex.species.get(speciesName);
-          if (sp?.types?.length) return sp.types;
+          // .slice() so we own our array — Showdown's Dex returns a live
+          // reference that can theoretically be mutated later, which would
+          // make scHistory's stored payload diverge from what we POSTed.
+          if (sp?.types?.length) return sp.types.slice();
         }
         if (win.BattlePokedex) {
           const entry = win.BattlePokedex[norm(speciesName)] || win.BattlePokedex[speciesName];
-          if (entry?.types) return entry.types;
+          if (entry?.types) return entry.types.slice();
         }
       } catch {}
       return [];
@@ -680,6 +683,18 @@ export default defineContentScript({
 
       try {
         const payload = translate(b);
+        // Guard: refuse to POST if active opp's types didn't resolve. Empty
+        // types silently downgrade to Typeless on the engine side, which
+        // broke immunity checks (observed 2026-04-20: Togekiss with types=[]
+        // → engine picked Earthquake on Flying). Retry next poll instead;
+        // the Dex usually populates within 1-2 ticks after a switch.
+        const oppActive = payload.sideTwo.pokemon[payload.sideTwo.activeIndex];
+        if (oppActive && oppActive.species !== 'none' &&
+            (!oppActive.types || oppActive.types.length === 0)) {
+          trace(`opp-types-unresolved key=${key}`, { species: oppActive.species });
+          hdrEl.textContent = 'Copilot — waiting for opp types…';
+          return; // don't cache lastKey — retry next poll
+        }
         const tag = req?.forceSwitch ? `force-switch (t${t})` : `turn ${t}`;
         statsEl.textContent = `decision: ${tag} — requesting…`;
         const record: DecisionRecord = {
