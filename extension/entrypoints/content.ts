@@ -300,6 +300,7 @@ export default defineContentScript({
       tEndMs?: number;
       forceSwitch: boolean;
       state: any;
+      payload: any;
       updates: any[];
       final?: any;
     };
@@ -635,6 +636,7 @@ export default defineContentScript({
           tStartMs: Date.now(),
           forceSwitch: !!req?.forceSwitch,
           state: snapshotState(b),
+          payload,
           updates: [],
         };
         scHistory.push(record);
