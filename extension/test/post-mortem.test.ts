@@ -542,6 +542,73 @@ describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
   });
 });
 
+describe('parseBattlePostMortem — team preview (Pass 0)', () => {
+  it('extracts team preview rosters for both sides', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|clearpoke',
+      '|poke|p1|Gliscor, F|',
+      '|poke|p1|Iron Hands|',
+      '|poke|p1|Medicham, F|',
+      '|poke|p2|Landorus-Therian, M|',
+      '|poke|p2|Ferrothorn, M|',
+      '|poke|p2|Gholdengo|',
+      '|teampreview',
+      '|start',
+      '|switch|p1a: Gliscor|Gliscor, F|100/100',
+      '|switch|p2a: Landorus|Landorus-Therian, M|381/381',
+      '|turn|1',
+      '|move|p2a: Landorus|Earthquake|p1a: Gliscor',
+      '|-damage|p1a: Gliscor|0 fnt',
+      '|faint|p1a: Gliscor',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Earthquake', pv: ['you=EARTHQUAKE them=EARTHQUAKE'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    // META.mySideId is 'p2', so p2 pokes go to 'mine'.
+    expect(pm.teamPreview).toEqual({
+      mine: ['Landorus-Therian', 'Ferrothorn', 'Gholdengo'],
+      opp:  ['Gliscor', 'Iron Hands', 'Medicham'],
+    });
+  });
+
+  it('returns null teamPreview when no |poke| lines exist', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|turn|1',
+      '|move|p2a: X|Tackle|p1a: Y',
+      '|-damage|p1a: Y|50/100',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.teamPreview).toBe(null);
+  });
+
+  it('strips gender / form / shiny suffixes from poke names', () => {
+    const stepQueue = [
+      '|clearpoke',
+      '|poke|p1|Charizard, M|',
+      '|poke|p1|Galvantula, M, shiny|',
+      '|poke|p1|Urshifu-*, M|',
+      '|poke|p2|Ogerpon-Wellspring, F|',
+      '|teampreview',
+      '|turn|1',
+      '|win|Me',
+    ];
+    const records: DecisionRecordInput[] = [];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.teamPreview).toEqual({
+      mine: ['Ogerpon-Wellspring'],
+      opp:  ['Charizard', 'Galvantula', 'Urshifu-*'],
+    });
+  });
+});
+
 describe('parseBattlePostMortem — schema v2', () => {
   it('emits schemaVersion 2', () => {
     const stepQueue = [

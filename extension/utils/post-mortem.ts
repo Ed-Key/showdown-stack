@@ -140,6 +140,7 @@ export function parseBattlePostMortem(
     turnEvents.set(turn, extractTurnEvents(turn, block, meta.mySideId));
   }
   records = dedupeRecords(records);
+  const pre = buildPreBattleState(stepQueue, meta.mySideId);
   const turns: TurnDiff[] = [];
   // Track in-turn force-switch consumption: walk faints on my side in order.
   const forceSwitchCursor = new Map<number, number>(); // turn -> next faint index to consume
@@ -167,9 +168,9 @@ export function parseBattlePostMortem(
     opponent: meta.opponent,
     winner,
     totalTurns,
-    startedAtMs: null,
+    startedAtMs: pre.startedAtMs,
     endedAtMs: Date.now(),
-    teamPreview: null,
+    teamPreview: pre.teamPreview,
     turns,
   };
 }
@@ -518,4 +519,38 @@ function dedupeRecords(records: DecisionRecordInput[]): DecisionRecordInput[] {
   // cursor logic (force-switch pairing) still sees records in-order.
   out.sort((a, b) => a.tStartMs - b.tStartMs);
   return out;
+}
+
+function speciesFromPokeLine(pokeValue: string): string {
+  // "Charizard, M" -> "Charizard"
+  // "Galvantula, M, shiny" -> "Galvantula"
+  // "Urshifu-*, M" -> "Urshifu-*"
+  return pokeValue.split(',')[0].trim();
+}
+
+export function buildPreBattleState(stepQueue: string[], mySideId: 'p1' | 'p2'): PreBattleState {
+  const mine: string[] = [];
+  const opp: string[] = [];
+  let startedAtMs: number | null = null;
+  for (const line of stepQueue) {
+    const parts = line.split('|').slice(1);
+    const tag = parts[0];
+    if (tag === 'poke') {
+      const side = parts[1] || '';
+      const raw = parts[2] || '';
+      const species = speciesFromPokeLine(raw);
+      if (!species) continue;
+      if (side === mySideId) mine.push(species);
+      else opp.push(species);
+    } else if (tag === 't:' && startedAtMs == null) {
+      const unix = Number(parts[1]);
+      if (isFinite(unix)) startedAtMs = unix * 1000;
+    }
+  }
+  const teamPreview = (mine.length || opp.length) ? { mine, opp } : null;
+  return {
+    hpTimeline: [],   // populated in Task 4
+    teamPreview,
+    startedAtMs,
+  };
 }
