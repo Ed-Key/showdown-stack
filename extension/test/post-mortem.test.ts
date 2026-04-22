@@ -144,3 +144,46 @@ describe('parseBattlePostMortem — modifier tags', () => {
     expect(t3.damageIDealt?.failed).toBe(true);
   });
 });
+
+describe('parseBattlePostMortem — PV normalization', () => {
+  const stepQueue = [
+    '|gametype|singles',
+    '|player|p1|Opp|1|',
+    '|player|p2|Me|2|',
+    '|start',
+    '|switch|p1a: OppMon|X|100/100',
+    '|switch|p2a: MyMon|Y|100/100',
+    '|turn|1',
+    '|move|p2a: MyMon|Thunder Punch|p1a: OppMon',
+    '|-damage|p1a: OppMon|50/100',
+    '|move|p1a: OppMon|Thunder Punch|p2a: MyMon',
+    '|-damage|p2a: MyMon|50/100',
+    '|win|Me',
+  ];
+
+  it('matches engine "THUNDERPUNCH" to Showdown "Thunder Punch"', () => {
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Thunder Punch', pv: ['you=THUNDERPUNCH them=THUNDERPUNCH'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect((pm.turns[0] as RegularTurnDiff).pvMatchedReality).toBe(true);
+  });
+
+  it('matches when names differ by case only', () => {
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Thunder Punch', pv: ['you=thunderpunch them=thunder Punch'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect((pm.turns[0] as RegularTurnDiff).pvMatchedReality).toBe(true);
+  });
+
+  it('mismatches different moves', () => {
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Thunder Punch', pv: ['you=THUNDERPUNCH them=DRAINPUNCH'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect((pm.turns[0] as RegularTurnDiff).pvMatchedReality).toBe(false);
+  });
+
+  it('returns null when PV missing', () => {
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Thunder Punch', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.enginePredictedOpp).toBe(null);
+    expect(t.pvMatchedReality).toBe(null);
+  });
+});
