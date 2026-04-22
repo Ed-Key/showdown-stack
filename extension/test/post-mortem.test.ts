@@ -373,3 +373,28 @@ describe('parseBattlePostMortem — tie', () => {
     expect(pm.turns).toHaveLength(1);
   });
 });
+
+describe('parseBattlePostMortem — win mid-turn', () => {
+  it('extracts winner even when |win| appears inside a turn block without a closing |turn|', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Secret Sword|p1a: OppMon',
+      '|-damage|p1a: OppMon|0 fnt',
+      '|faint|p1a: OppMon',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Secret Sword', pv: ['you=SECRETSWORD them=NOMOVE'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.winner).toBe('Me');
+    expect(pm.totalTurns).toBe(1);
+    const t = pm.turns[0] as RegularTurnDiff;
+    // The |win| event must not pollute any field (no 'win' string in failures, hazards, faints).
+    expect(t.failureMessages).toEqual([]);
+  });
+});
