@@ -718,6 +718,28 @@ export default defineContentScript({
             : 'draw/unknown'} in ${t} turns`
         );
       }
+      if (b?.ended && br?.id && !dumpedBattleIds.has(br.id)) {
+        try {
+          const battleRecords = scHistory.filter(r => r.battleId === br.id);
+          const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
+          const pm = parseBattlePostMortem(
+            battleRecords as any,
+            (b.stepQueue || []).slice(),
+            {
+              battleId: br.id,
+              format: b.tier || 'unknown',
+              myUsername: b.mySide?.name || 'unknown',
+              mySideId,
+              opponent: b.farSide?.name || 'unknown',
+            },
+          );
+          persistPostMortem(pm);
+          dumpedBattleIds.add(br.id);
+          console.log(`[sc:postmortem] dumped ${pm.turns.length} turns for ${br.id}`);
+        } catch (e) {
+          console.error('[sc:postmortem] parse/dump failed', e);
+        }
+      }
       // Showdown stores the current decision request on the room, not on
       // the battle object. b.request is usually null; br.request is the
       // real source of truth for team preview / move select / force switch.
