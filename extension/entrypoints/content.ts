@@ -665,6 +665,64 @@ export default defineContentScript({
       };
     };
 
+    (win as any).__scPostMortem = (battleId?: string): BattlePostMortem | null => {
+      const cur = (win as any).app?.curRoom;
+      const curB = cur?.battle;
+      const id = battleId ?? cur?.id ?? null;
+      if (!id) return null;
+      const raw = localStorage.getItem(`sc:postmortem:${id}`);
+      if (raw) {
+        try { return JSON.parse(raw) as BattlePostMortem; } catch { return null; }
+      }
+      // Fallback: re-parse live if this is the current battle and stepQueue is available.
+      if (cur?.id === id && curB?.stepQueue) {
+        const battleRecords = scHistory.filter(r => r.battleId === id);
+        const mySideId = (curB.mySide?.sideid || curB.mySide?.id || 'p1') as 'p1' | 'p2';
+        return parseBattlePostMortem(
+          battleRecords as any,
+          (curB.stepQueue || []).slice(),
+          {
+            battleId: id,
+            format: curB.tier || 'unknown',
+            myUsername: curB.mySide?.name || 'unknown',
+            mySideId,
+            opponent: curB.farSide?.name || 'unknown',
+          },
+        );
+      }
+      return null;
+    };
+
+    (win as any).__scPostMortemAll = (): BattlePostMortem[] => {
+      const out: BattlePostMortem[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('sc:postmortem:')) continue;
+        try {
+          const pm = JSON.parse(localStorage.getItem(k) || '') as BattlePostMortem;
+          out.push(pm);
+        } catch {}
+      }
+      out.sort((a, b) => b.endedAtMs - a.endedAtMs);
+      return out;
+    };
+
+    (win as any).__scPostMortemClear = (battleId?: string): number => {
+      if (battleId) {
+        const k = `sc:postmortem:${battleId}`;
+        const existed = localStorage.getItem(k) != null;
+        localStorage.removeItem(k);
+        return existed ? 1 : 0;
+      }
+      const keys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('sc:postmortem:')) keys.push(k);
+      }
+      for (const k of keys) localStorage.removeItem(k);
+      return keys.length;
+    };
+
     setInterval(() => {
       const rooms = win.app?.rooms;
       if (!rooms) { trace('no-rooms'); return; }
