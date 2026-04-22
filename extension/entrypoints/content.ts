@@ -726,6 +726,33 @@ export default defineContentScript({
     setInterval(() => {
       const rooms = win.app?.rooms;
       if (!rooms) { trace('no-rooms'); return; }
+      // Dump post-mortems for any ended battle rooms we haven't dumped yet.
+      // Must run before the room-selection below, which filters out ended
+      // battles — otherwise ended battles are never observed by this loop.
+      for (const [roomId, room] of Object.entries(rooms)) {
+        const eb = (room as any)?.battle;
+        if (!eb?.ended || !roomId.startsWith('battle-') || dumpedBattleIds.has(roomId)) continue;
+        try {
+          const battleRecords = scHistory.filter(r => r.battleId === roomId);
+          const mySideId = (eb.mySide?.sideid || eb.mySide?.id || 'p1') as 'p1' | 'p2';
+          const pm = parseBattlePostMortem(
+            battleRecords as any,
+            (eb.stepQueue || []).slice(),
+            {
+              battleId: roomId,
+              format: eb.tier || 'unknown',
+              myUsername: eb.mySide?.name || 'unknown',
+              mySideId,
+              opponent: eb.farSide?.name || 'unknown',
+            },
+          );
+          persistPostMortem(pm);
+          dumpedBattleIds.add(roomId);
+          console.log(`[sc:postmortem] dumped ${pm.turns.length} turns for ${roomId}`);
+        } catch (e) {
+          console.error('[sc:postmortem] parse/dump failed', e);
+        }
+      }
       // Prefer app.curRoom — that's the battle the user is actually viewing
       const cur = win.app.curRoom;
       let br: any = null;
@@ -775,28 +802,6 @@ export default defineContentScript({
             ? (winner === myName ? 'WIN' : winner === oppName ? 'LOSS' : `winner=${winner}`)
             : 'draw/unknown'} in ${t} turns`
         );
-      }
-      if (b?.ended && br?.id && !dumpedBattleIds.has(br.id)) {
-        try {
-          const battleRecords = scHistory.filter(r => r.battleId === br.id);
-          const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
-          const pm = parseBattlePostMortem(
-            battleRecords as any,
-            (b.stepQueue || []).slice(),
-            {
-              battleId: br.id,
-              format: b.tier || 'unknown',
-              myUsername: b.mySide?.name || 'unknown',
-              mySideId,
-              opponent: b.farSide?.name || 'unknown',
-            },
-          );
-          persistPostMortem(pm);
-          dumpedBattleIds.add(br.id);
-          console.log(`[sc:postmortem] dumped ${pm.turns.length} turns for ${br.id}`);
-        } catch (e) {
-          console.error('[sc:postmortem] parse/dump failed', e);
-        }
       }
       // Showdown stores the current decision request on the room, not on
       // the battle object. b.request is usually null; br.request is the
