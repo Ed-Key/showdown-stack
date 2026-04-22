@@ -157,7 +157,7 @@ export function parseBattlePostMortem(
       const blockLines = turnBlocks.get(r.turn)?.lines.map(e => e.line) || [];
       const cause = fainted ? findCauseOfMyFaint(cursor, blockLines, meta.mySideId) : null;
       const switchInTook = findHazardDamageOnSwitchIn(blockLines, meta.mySideId, cursor);
-      turns.push(buildForceSwitchTurnDiff(r, fainted, cause, switchInTook));
+      turns.push(buildForceSwitchTurnDiff(r, fainted, cause, switchInTook, te.residualEvents));
     }
   }
   return {
@@ -186,6 +186,7 @@ type TurnEvents = {
   hazardsAdded: { side: 'mine' | 'opp'; name: string }[];
   hazardsRemoved: { side: 'mine' | 'opp'; name: string }[];
   hints: string[];
+  residualEvents: ResidualEvent[];
 };
 
 type MoveInstance = {
@@ -283,7 +284,7 @@ function extractTurnEvents(
 ): TurnEvents {
   const te: TurnEvents = {
     turn, myMove: null, oppMove: null,
-    faints: [], hazardsAdded: [], hazardsRemoved: [], hints: [],
+    faints: [], hazardsAdded: [], hazardsRemoved: [], hints: [], residualEvents: [],
   };
   let lastMove: MoveInstance | null = null;
   for (const { idx: currentEventIndex, line } of block.lines) {
@@ -311,13 +312,29 @@ function extractTurnEvents(
       if (side === 'mine') te.myMove = mi;
       else te.oppMove = mi;
       lastMove = mi;
-    } else if (tag === '-damage') {
+    } else if (tag === '-damage' || tag === '-heal') {
       const victim = parts[1] || '';
-      const hpAfter = parseHpPct(parts[2]);
+      const hpToken = parts[2];
       const side = classifySide(victim, mySideId);
-      if (lastMove && side && side !== lastMove.attackerSide) {
+      if (!side) continue;
+      const fromMatch = line.match(/\[from\]\s*([^|]+)/);
+
+      if (fromMatch) {
+        const rawSource = fromMatch[1].trim();
+        const pos = extractPosition(victim);
+        const prevHp = pos ? lookupHpBefore(hpTimeline, currentEventIndex, pos) : null;
+        const newHp = parseHpPct(hpToken) ?? 0;
+        const delta = (prevHp ?? 100) - newHp;
+        te.residualEvents.push({
+          side,
+          source: rawSource,
+          category: categorizeResidual(rawSource),
+          hpPctLost: tag === '-damage' ? delta : -Math.abs(delta),
+          targetSpecies: speciesFromToken(victim),
+        });
+      } else if (tag === '-damage' && lastMove && side !== lastMove.attackerSide) {
         if (lastMove.hpPctBefore == null) lastMove.hpPctBefore = 100;
-        lastMove.hpPctAfter = hpAfter;
+        lastMove.hpPctAfter = parseHpPct(hpToken);
       }
     } else if (tag === 'faint') {
       const victim = parts[1] || '';
@@ -406,7 +423,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     hazardsRemoved: [...te.hazardsRemoved],
     faints: [...te.faints],
     failureMessages: [...te.hints],
-    residualEvents: [],   // populated in later tasks
+    residualEvents: [...te.residualEvents],
   };
 }
 
@@ -499,6 +516,7 @@ function buildForceSwitchTurnDiff(
   fainted: { side: 'mine' | 'opp'; species: string } | null,
   cause: string | null,
   switchInTook: { hpPctLost: number; from: string } | null,
+  residualEvents: ResidualEvent[],
 ): ForceSwitchTurnDiff {
   const pv = r.final?.pv ?? [];
   return {
@@ -515,7 +533,7 @@ function buildForceSwitchTurnDiff(
     },
     faintedBefore: fainted ? { species: fainted.species, cause } : null,
     switchInTook,
-    residualEvents: [],   // populated in later tasks
+    residualEvents: [...residualEvents],
   };
 }
 
@@ -603,4 +621,14 @@ export function lookupHpBefore(
     if (e.position === position) return e.hpPct;
   }
   return null;
+}
+
+function categorizeResidual(source: string): ResidualCategory {
+  const s = source.toLowerCase().trim();
+  if (/^stealth rock$|^spikes$|^sticky web$|^toxic spikes$|g-max steelsurge/.test(s)) return 'hazard';
+  if (/^(psn|tox|brn|confusion|recoil|curse|leech seed|perish|future sight|doom desire|nightmare|sandstorm|hail|saltcure)$/.test(s)) return 'status';
+  if (/^(item: )?rocky helmet$|^ability: (rough skin|iron barbs|aftermath)$/.test(s)) return 'contact';
+  if (/^item: (leftovers|black sludge|shell bell)$/.test(s)) return 'item';
+  if (/^(move: )?(spiky shield|baneful bunker|jungle healing|g-max volt crash)$/.test(s)) return 'shield';
+  return 'other';
 }

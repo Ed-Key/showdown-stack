@@ -741,3 +741,125 @@ describe('lookupHpBefore', () => {
     expect(lookupHpBefore(tl, 5, 'p1a')).toBe(100);
   });
 });
+
+describe('parseBattlePostMortem — residual damage (hazard)', () => {
+  it('captures Stealth Rock damage on switch-in', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Landorus|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Stealth Rock|p1a: OppMon',
+      '|-sidestart|p1: Opp|move: Stealth Rock',
+      '|turn|2',
+      '|switch|p1a: OppMon2|Medicham|88/100',
+      '|-damage|p1a: OppMon2|88/100|[from] Stealth Rock',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Stealth Rock', pv: [] } }),
+      rec({ turn: 2, rqid: 2, final: { bestMove: 'Tackle', pv: [] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t2 = pm.turns[1] as RegularTurnDiff;
+    expect(t2.residualEvents.length).toBeGreaterThanOrEqual(1);
+    const sr = t2.residualEvents.find(e => e.source === 'Stealth Rock');
+    expect(sr).toBeDefined();
+    expect(sr?.category).toBe('hazard');
+    expect(sr?.side).toBe('opp');
+    expect(sr?.targetSpecies).toBe('OppMon2');
+  });
+});
+
+describe('parseBattlePostMortem — residual damage (contact)', () => {
+  it('captures Rocky Helmet recoil', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|Scizor|100/100',
+      '|switch|p2a: MyMon|Landorus|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Bullet Punch|p2a: MyMon',
+      '|-damage|p2a: MyMon|80/100',
+      '|-damage|p1a: OppMon|85/100|[from] item: Rocky Helmet|[of] p2a: MyMon',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Protect', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    const rh = t.residualEvents.find(e => e.source === 'item: Rocky Helmet');
+    expect(rh).toBeDefined();
+    expect(rh?.category).toBe('contact');
+    expect(rh?.side).toBe('opp');
+    expect(rh?.targetSpecies).toBe('OppMon');
+    expect(rh?.hpPctLost).toBe(15);   // 100 (prior HP) - 85 (new HP)
+  });
+});
+
+describe('parseBattlePostMortem — residual damage (status)', () => {
+  it('captures poison tick', () => {
+    const stepQueue = [
+      '|switch|p2a: MyMon|X|100/100 psn',
+      '|turn|1',
+      '|-damage|p2a: MyMon|87/100 psn|[from] psn',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Rest', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    const psn = t.residualEvents.find(e => e.source === 'psn');
+    expect(psn?.category).toBe('status');
+    expect(psn?.side).toBe('mine');
+    expect(psn?.hpPctLost).toBe(13);
+  });
+});
+
+describe('parseBattlePostMortem — residual heal (Leftovers)', () => {
+  it('captures Leftovers as negative hpPctLost', () => {
+    const stepQueue = [
+      '|switch|p2a: MyMon|X|80/100',
+      '|turn|1',
+      '|-heal|p2a: MyMon|92/100|[from] item: Leftovers',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Recover', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    const lefts = t.residualEvents.find(e => e.source === 'item: Leftovers');
+    expect(lefts?.category).toBe('item');
+    expect(lefts?.hpPctLost).toBeLessThan(0);   // heal -> negative
+  });
+});
+
+describe('parseBattlePostMortem — residual damage (shield)', () => {
+  it('captures Spiky Shield recoil', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|Ogerpon|100/100',
+      '|switch|p2a: MyMon|Ogerpon|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Horn Leech|p1a: OppMon',
+      '|-activate|p1a: OppMon|move: Spiky Shield',
+      '|-damage|p2a: MyMon|88/100|[from] Spiky Shield|[of] p1a: OppMon',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Horn Leech', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    const sp = t.residualEvents.find(e => e.source === 'Spiky Shield');
+    expect(sp?.category).toBe('shield');
+    expect(sp?.side).toBe('mine');
+  });
+});
+
+describe('parseBattlePostMortem — residual damage (unknown/other)', () => {
+  it('unknown source falls back to category "other" with raw source preserved', () => {
+    const stepQueue = [
+      '|switch|p2a: MyMon|X|100/100',
+      '|turn|1',
+      '|-damage|p2a: MyMon|50/100|[from] ability: Madeupability',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Rest', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    const x = t.residualEvents.find(e => e.source === 'ability: Madeupability');
+    expect(x?.category).toBe('other');
+  });
+});
