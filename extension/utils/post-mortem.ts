@@ -134,13 +134,13 @@ export function parseBattlePostMortem(
   const turnBlocks = partitionByTurn(stepQueue);
   const winner = extractWinner(stepQueue);
   const totalTurns = [...turnBlocks.keys()].filter(k => k > 0).reduce((a, b) => Math.max(a, b), 0);
+  records = dedupeRecords(records);
+  const pre = buildPreBattleState(stepQueue, meta.mySideId);
   const turnEvents = new Map<number, TurnEvents>();
   for (const [turn, block] of turnBlocks) {
     if (turn <= 0) continue;
-    turnEvents.set(turn, extractTurnEvents(turn, block, meta.mySideId));
+    turnEvents.set(turn, extractTurnEvents(turn, block, meta.mySideId, pre.hpTimeline));
   }
-  records = dedupeRecords(records);
-  const pre = buildPreBattleState(stepQueue, meta.mySideId);
   const turns: TurnDiff[] = [];
   // Track in-turn force-switch consumption: walk faints on my side in order.
   const forceSwitchCursor = new Map<number, number>(); // turn -> next faint index to consume
@@ -154,8 +154,9 @@ export function parseBattlePostMortem(
       const myFaints = te.faints.filter(f => f.side === 'mine');
       const fainted = myFaints[cursor] ?? null;
       forceSwitchCursor.set(r.turn, cursor + 1);
-      const cause = fainted ? findCauseOfMyFaint(cursor, turnBlocks.get(r.turn) || [], meta.mySideId) : null;
-      const switchInTook = findHazardDamageOnSwitchIn(turnBlocks.get(r.turn) || [], meta.mySideId, cursor);
+      const blockLines = turnBlocks.get(r.turn)?.lines.map(e => e.line) || [];
+      const cause = fainted ? findCauseOfMyFaint(cursor, blockLines, meta.mySideId) : null;
+      const switchInTook = findHazardDamageOnSwitchIn(blockLines, meta.mySideId, cursor);
       turns.push(buildForceSwitchTurnDiff(r, fainted, cause, switchInTook));
     }
   }
@@ -201,18 +202,27 @@ type MoveInstance = {
   failed: boolean;
 };
 
-function partitionByTurn(stepQueue: string[]): Map<number, string[]> {
-  const out = new Map<number, string[]>();
+type TurnBlock = { startIdx: number; lines: { idx: number; line: string }[] };
+
+function partitionByTurn(stepQueue: string[]): Map<number, TurnBlock> {
+  const out = new Map<number, TurnBlock>();
   let current = 0;
-  out.set(0, []);
-  for (const line of stepQueue) {
+  let block: TurnBlock = { startIdx: 0, lines: [] };
+  out.set(0, block);
+  for (let idx = 0; idx < stepQueue.length; idx++) {
+    const line = stepQueue[idx];
     const m = line.match(/^\|turn\|(\d+)/);
     if (m) {
       current = Number(m[1]);
-      if (!out.has(current)) out.set(current, []);
+      if (!out.has(current)) {
+        block = { startIdx: idx, lines: [] };
+        out.set(current, block);
+      } else {
+        block = out.get(current)!;
+      }
       continue;
     }
-    out.get(current)!.push(line);
+    out.get(current)!.lines.push({ idx, line });
   }
   return out;
 }
@@ -265,13 +275,18 @@ function speciesFromToken(token: string): string {
   return idx >= 0 ? token.slice(idx + 2) : token;
 }
 
-function extractTurnEvents(turn: number, block: string[], mySideId: 'p1' | 'p2'): TurnEvents {
+function extractTurnEvents(
+  turn: number,
+  block: TurnBlock,
+  mySideId: 'p1' | 'p2',
+  hpTimeline: HpTimelineEntry[],
+): TurnEvents {
   const te: TurnEvents = {
     turn, myMove: null, oppMove: null,
     faints: [], hazardsAdded: [], hazardsRemoved: [], hints: [],
   };
   let lastMove: MoveInstance | null = null;
-  for (const line of block) {
+  for (const { idx: currentEventIndex, line } of block.lines) {
     const parts = line.split('|').slice(1); // drop leading '' from split
     const tag = parts[0];
     if (tag === 'move') {
