@@ -205,6 +205,12 @@ function classifySide(token: string, mySideId: 'p1' | 'p2'): 'mine' | 'opp' | nu
   return m[1] === mySideId ? 'mine' : 'opp';
 }
 
+function classifySideBase(token: string, mySideId: 'p1' | 'p2'): 'mine' | 'opp' | null {
+  const m = token.match(/^(p[12])\b/);
+  if (!m) return null;
+  return m[1] === mySideId ? 'mine' : 'opp';
+}
+
 function parseHpPct(hpToken: string | undefined): number | null {
   if (!hpToken) return null;
   if (hpToken.includes('fnt')) return 0;
@@ -294,6 +300,16 @@ function extractTurnEvents(turn: number, block: string[], mySideId: 'p1' | 'p2')
       const side = classifySide(attacker, mySideId);
       const attackerMove = side === 'mine' ? te.myMove : side === 'opp' ? te.oppMove : null;
       if (attackerMove) attackerMove.failed = true;
+    } else if (tag === '-sidestart') {
+      const sideToken = parts[1] || '';
+      const rawName = (parts[2] || '').replace(/^move:\s*/, '');
+      const side = classifySideBase(sideToken, mySideId);
+      if (side && rawName) te.hazardsAdded.push({ side, name: rawName });
+    } else if (tag === '-sideend') {
+      const sideToken = parts[1] || '';
+      const rawName = (parts[2] || '').replace(/^move:\s*/, '');
+      const side = classifySideBase(sideToken, mySideId);
+      if (side && rawName) te.hazardsRemoved.push({ side, name: rawName });
     }
   }
   return te;

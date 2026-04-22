@@ -305,3 +305,30 @@ describe('parseBattlePostMortem — double force-switch', () => {
     expect(fs2.switchInTook?.hpPctLost).toBe(13);
   });
 });
+
+describe('parseBattlePostMortem — hazards', () => {
+  it('tracks |-sidestart| and |-sideend| with correct side', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Landorus|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Stealth Rock|p2a: MyMon',
+      '|-sidestart|p2: Me|move: Stealth Rock',
+      '|move|p2a: MyMon|Defog|p1a: OppMon',
+      '|-sideend|p2: Me|move: Stealth Rock',
+      '|turn|2',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Defog', pv: ['you=DEFOG them=STEALTHROCK'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.hazardsAdded).toEqual([{ side: 'mine', name: 'Stealth Rock' }]);
+    expect(t.hazardsRemoved).toEqual([{ side: 'mine', name: 'Stealth Rock' }]);
+  });
+});
