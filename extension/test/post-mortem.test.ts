@@ -445,3 +445,99 @@ describe('parseBattlePostMortem — TripleJ integration', () => {
     expect(t.faints.some(f => f.side === 'mine' && f.species === 'Landorus')).toBe(true);
   });
 });
+
+describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
+  it('collapses duplicate rqids keeping the latest complete final', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Secret Sword|p1a: OppMon',
+      '|-damage|p1a: OppMon|50/100',
+      '|move|p1a: OppMon|Body Slam|p2a: MyMon',
+      '|-damage|p2a: MyMon|70/100',
+      '|win|Me',
+    ];
+    // Three records, two share rqid=7 (one incomplete, one complete). Different rqid=5 is separate.
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 0, rqid: 5, final: null }),                       // team-preview scaffold
+      rec({ turn: 1, rqid: 5, final: { bestMove: 'Secret Sword', confidence: 0.5, pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
+      rec({ turn: 1, rqid: 7, final: null }),                       // incomplete duplicate
+      rec({ turn: 1, rqid: 7, final: { bestMove: 'Secret Sword', confidence: 0.9, pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    // After dedup: rqid=5 (the complete one, turn=1) + rqid=7 (the complete one) = 2 records.
+    // Parser skips turn=0 (no turn block exists); rqid=5 turn=1 and rqid=7 turn=1 both emit TurnDiffs,
+    // but both live in turn 1's block, so we get 2 TurnDiffs for turn 1.
+    expect(pm.turns).toHaveLength(2);
+    // Both picks should be Secret Sword (complete records won over incomplete ones).
+    for (const t of pm.turns) {
+      expect((t as RegularTurnDiff).myPick.name).toBe('Secret Sword');
+    }
+    // The higher-confidence (rqid=7) record's confidence should be 0.9; the lower (rqid=5) should be 0.5.
+    const confs = pm.turns.map(t => (t as RegularTurnDiff).myPick.confidence).sort();
+    expect(confs).toEqual([0.5, 0.9]);
+  });
+
+  it('keeps the only record when no complete final exists', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|turn|1',
+      '|move|p1a: OppMon|Body Slam|p2a: MyMon',
+      '|-damage|p2a: MyMon|70/100',
+      '|win|Opp',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 7, final: null }),
+      rec({ turn: 1, rqid: 7, final: null }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    // Even with no completes, one TurnDiff emitted for rqid=7 (the latest record kept).
+    expect(pm.turns).toHaveLength(1);
+    expect((pm.turns[0] as RegularTurnDiff).myPick.name).toBe(null);
+  });
+
+  it('preserves distinct rqids on same turn (legit double force-switch)', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: A|Aegislash|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Explosion|p2a: A',
+      '|-damage|p2a: A|0 fnt',
+      '|-damage|p1a: OppMon|0 fnt',
+      '|faint|p1a: OppMon',
+      '|faint|p2a: A',
+      '|switch|p2a: B|Blissey|100/100',
+      '|move|p2a: B|Tackle|p1a: OppMon2',
+      '|-damage|p1a: OppMon2|0 fnt',
+      '|faint|p1a: OppMon2',
+      '|move|p1a: OppMon3|Earthquake|p2a: B',
+      '|-damage|p2a: B|0 fnt',
+      '|faint|p2a: B',
+      '|switch|p2a: C|Corviknight|100/100',
+      '|win|Opp',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 5, forceSwitch: false, final: { bestMove: 'Swords Dance', pv: ['you=SWORDSDANCE them=EXPLOSION'] } }),
+      rec({ turn: 1, rqid: 7, forceSwitch: true, tStartMs: 1100, final: { bestMove: 'Blissey', pv: ['you=BLISSEY them=NOMOVE'] } }),
+      rec({ turn: 1, rqid: 9, forceSwitch: true, tStartMs: 1200, final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=NOMOVE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    // Three distinct rqids → three TurnDiffs, not merged.
+    expect(pm.turns).toHaveLength(3);
+    const fs1 = pm.turns[1] as ForceSwitchTurnDiff;
+    const fs2 = pm.turns[2] as ForceSwitchTurnDiff;
+    expect(fs1.faintedBefore?.species).toBe('A');
+    expect(fs2.faintedBefore?.species).toBe('B');
+  });
+});

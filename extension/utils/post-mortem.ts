@@ -114,6 +114,7 @@ export function parseBattlePostMortem(
     if (turn <= 0) continue;
     turnEvents.set(turn, extractTurnEvents(turn, block, meta.mySideId));
   }
+  records = dedupeRecords(records);
   const turns: TurnDiff[] = [];
   // Track in-turn force-switch consumption: walk faints on my side in order.
   const forceSwitchCursor = new Map<number, number>(); // turn -> next faint index to consume
@@ -467,4 +468,27 @@ function buildForceSwitchTurnDiff(
     faintedBefore: fainted ? { species: fainted.species, cause } : null,
     switchInTook,
   };
+}
+
+function dedupeRecords(records: DecisionRecordInput[]): DecisionRecordInput[] {
+  // Showdown's request lifecycle sometimes produces two scHistory entries per
+  // rqid (poll fires before engine response, then fires again after b.turn
+  // advances but rqid is unchanged). Collapse by rqid, preferring records
+  // with a complete final.bestMove. For each rqid group, keep the LAST record
+  // with a complete final, or the last record if none are complete.
+  const groups = new Map<number, DecisionRecordInput[]>();
+  for (const r of records) {
+    const arr = groups.get(r.rqid);
+    if (arr) arr.push(r);
+    else groups.set(r.rqid, [r]);
+  }
+  const out: DecisionRecordInput[] = [];
+  for (const [, group] of groups) {
+    const complete = group.filter(r => r.final?.bestMove);
+    out.push(complete.length > 0 ? complete[complete.length - 1] : group[group.length - 1]);
+  }
+  // Preserve original chronological order by tStartMs so the main loop's
+  // cursor logic (force-switch pairing) still sees records in-order.
+  out.sort((a, b) => a.tStartMs - b.tStartMs);
+  return out;
 }
