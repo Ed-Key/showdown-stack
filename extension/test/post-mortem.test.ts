@@ -541,3 +541,37 @@ describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
     expect(fs2.faintedBefore?.species).toBe('B');
   });
 });
+
+describe('parseBattlePostMortem — schema v2', () => {
+  it('emits schemaVersion 2', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|turn|1',
+      '|move|p2a: MyMon|Tackle|p1a: OppMon',
+      '|-damage|p1a: OppMon|50/100',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: ['you=TACKLE them=TACKLE'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.schemaVersion).toBe(2);
+  });
+
+  it('RegularTurnDiff has residualEvents field', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|turn|1',
+      '|move|p2a: MyMon|Tackle|p1a: OppMon',
+      '|-damage|p1a: OppMon|50/100',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(Array.isArray(t.residualEvents)).toBe(true);
+    expect(t.residualEvents).toEqual([]);
+  });
+});

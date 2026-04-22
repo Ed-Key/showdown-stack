@@ -2,7 +2,7 @@
 // events and produces a compact per-battle post-mortem.
 // No DOM, no globals, no side effects — safe to import into Vitest.
 
-export const POSTMORTEM_SCHEMA_VERSION = 1 as const;
+export const POSTMORTEM_SCHEMA_VERSION = 2 as const;
 
 export type DecisionRecordInput = {
   battleId: string;
@@ -45,6 +45,29 @@ export type MoveOutcome = {
   failed: boolean;
 };
 
+export type ResidualCategory = 'hazard' | 'status' | 'contact' | 'item' | 'shield' | 'other';
+
+export type ResidualEvent = {
+  side: 'mine' | 'opp';
+  source: string;           // raw from-tag text, e.g. "item: Rocky Helmet", "psn", "Leech Seed"
+  category: ResidualCategory;
+  hpPctLost: number;        // positive = damage, negative = heal
+  targetSpecies: string;
+};
+
+export type HpTimelineEntry = {
+  eventIndex: number;
+  position: string;         // e.g. "p1a", "p2a"
+  hpPct: number | null;
+  event: 'switch' | 'damage' | 'heal' | 'faint';
+};
+
+export type PreBattleState = {
+  hpTimeline: HpTimelineEntry[];
+  teamPreview: { mine: string[]; opp: string[] } | null;
+  startedAtMs: number | null;
+};
+
 export type RegularTurnDiff = {
   turn: number;
   forceSwitch: false;
@@ -66,6 +89,7 @@ export type RegularTurnDiff = {
   hazardsRemoved: { side: 'mine' | 'opp'; name: string }[];
   faints: { side: 'mine' | 'opp'; species: string }[];
   failureMessages: string[];
+  residualEvents: ResidualEvent[];
 };
 
 export type ForceSwitchTurnDiff = {
@@ -82,6 +106,7 @@ export type ForceSwitchTurnDiff = {
   };
   faintedBefore: { species: string; cause: string | null } | null;
   switchInTook: { hpPctLost: number; from: string } | null;
+  residualEvents: ResidualEvent[];
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -359,6 +384,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     hazardsRemoved: [...te.hazardsRemoved],
     faints: [...te.faints],
     failureMessages: [...te.hints],
+    residualEvents: [],   // populated in later tasks
   };
 }
 
@@ -467,6 +493,7 @@ function buildForceSwitchTurnDiff(
     },
     faintedBefore: fainted ? { species: fainted.species, cause } : null,
     switchInTook,
+    residualEvents: [],   // populated in later tasks
   };
 }
 
