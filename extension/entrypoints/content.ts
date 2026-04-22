@@ -2,6 +2,7 @@
 // Reads Showdown's app / Dex globals directly, fetches the local poke-engine
 // /analyze/stream endpoint, streams NDJSON updates into a floating panel.
 import { priorMovesForSpecies } from '../utils/chaos-priors';
+import { parseBattlePostMortem, type BattlePostMortem } from '../utils/post-mortem';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -368,6 +369,43 @@ export default defineContentScript({
     const scHistory: DecisionRecord[] = [];
     const scResults: BattleResult[] = [];
     let lastEndedBattleId: string | null = null;
+
+    const dumpedBattleIds = new Set<string>();
+
+    function persistPostMortem(pm: BattlePostMortem): void {
+      const key = `sc:postmortem:${pm.battleId}`;
+      const json = JSON.stringify(pm);
+      try {
+        localStorage.setItem(key, json);
+        return;
+      } catch (e) {
+        if (!(e instanceof DOMException) || e.name !== 'QuotaExceededError') throw e;
+      }
+      // Quota hit: prune oldest until it fits or store is empty.
+      const all: { key: string; endedAtMs: number }[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('sc:postmortem:')) continue;
+        try {
+          const o = JSON.parse(localStorage.getItem(k) || '{}');
+          if (typeof o.endedAtMs === 'number') all.push({ key: k, endedAtMs: o.endedAtMs });
+        } catch {}
+      }
+      all.sort((a, b) => a.endedAtMs - b.endedAtMs);
+      let pruned = 0;
+      for (const { key: oldKey } of all) {
+        localStorage.removeItem(oldKey);
+        pruned++;
+        try {
+          localStorage.setItem(key, json);
+          console.log(`[sc:postmortem] pruned ${pruned} old battle(s) to fit new dump`);
+          return;
+        } catch {
+          // keep pruning
+        }
+      }
+      console.error('[sc:postmortem] could not fit new dump even after pruning all entries');
+    }
 
     (win as any).__scHistory = () => scHistory;
     (win as any).__scResults = () => scResults;
