@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   parseBattlePostMortem,
   POSTMORTEM_SCHEMA_VERSION,
+  type BattlePostMortem,
   type DecisionRecordInput,
   type ParseMeta,
   type RegularTurnDiff,
   type ForceSwitchTurnDiff,
 } from '../utils/post-mortem';
+import fixture from './fixtures/stepqueue-triplej-loss.json';
 
 const META: ParseMeta = {
   battleId: 'synthetic-1',
@@ -396,5 +398,50 @@ describe('parseBattlePostMortem — win mid-turn', () => {
     const t = pm.turns[0] as RegularTurnDiff;
     // The |win| event must not pollute any field (no 'win' string in failures, hazards, faints).
     expect(t.failureMessages).toEqual([]);
+  });
+});
+
+describe('parseBattlePostMortem — TripleJ integration', () => {
+  const pm: BattlePostMortem = parseBattlePostMortem(
+    fixture.scHistoryForBattle as DecisionRecordInput[],
+    fixture.stepQueue,
+    {
+      battleId: fixture.meta.battleId,
+      format: fixture.meta.format,
+      myUsername: fixture.meta.myUsername,
+      mySideId: fixture.meta.mySideId as 'p1' | 'p2',
+      opponent: fixture.meta.opponent,
+    },
+  );
+
+  it('parses without throwing', () => {
+    expect(pm).toBeTruthy();
+  });
+  it('identifies the winner', () => {
+    expect(pm.winner).toBe('TripleJ1118');
+  });
+  it('counts 20 total turns', () => {
+    expect(pm.totalTurns).toBe(20);
+  });
+  it('emits exactly one TurnDiff (extension initialized mid-battle)', () => {
+    expect(pm.turns).toHaveLength(1);
+    expect(pm.turns[0].turn).toBe(20);
+  });
+  it('turn 20: engine recommended TAUNT, opp actually used Ice Spinner', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.myPick.name).toBe('TAUNT');
+    expect(t.actualOppMove).toBe('Ice Spinner');
+  });
+  it('turn 20: pvMatchedReality true (ICESPINNER normalizes to Ice Spinner)', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.pvMatchedReality).toBe(true);
+  });
+  it('turn 20: opp move flagged super-effective', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.damageOppDealt?.superEffective).toBe(true);
+  });
+  it('turn 20: my side fainted (Landorus)', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.faints.some(f => f.side === 'mine' && f.species === 'Landorus')).toBe(true);
   });
 });
