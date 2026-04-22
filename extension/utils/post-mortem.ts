@@ -369,6 +369,8 @@ function extractTurnEvents(
       const side = classifySide(attacker, mySideId);
       const attackerMove = side === 'mine' ? te.myMove : side === 'opp' ? te.oppMove : null;
       if (attackerMove) attackerMove.failed = true;
+      const reason = parts.slice(2).join('|');
+      te.hints.push(`fail: ${attacker}${reason ? `: ${reason}` : ''}`);
     } else if (tag === '-sidestart') {
       const sideToken = parts[1] || '';
       const rawName = (parts[2] || '').replace(/^move:\s*/, '');
@@ -379,6 +381,20 @@ function extractTurnEvents(
       const rawName = (parts[2] || '').replace(/^move:\s*/, '');
       const side = classifySideBase(sideToken, mySideId);
       if (side && rawName) te.hazardsRemoved.push({ side, name: rawName });
+    } else if (tag === 'hint') {
+      const text = parts.slice(1).join('|');
+      if (text) te.hints.push(text);
+    } else if (tag === '-activate') {
+      const who = parts[1] || '';
+      const effect = parts[2] || '';
+      if (effect.startsWith('move: Protect') ||
+          effect.startsWith('move: Detect') ||
+          effect.startsWith('move: Spiky Shield') ||
+          effect.startsWith('move: Baneful Bunker') ||
+          effect.startsWith("move: King's Shield") ||
+          effect.startsWith('ability: Disguise')) {
+        te.hints.push(`${effect} by ${speciesFromToken(who)}`);
+      }
     }
   }
   return te;

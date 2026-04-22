@@ -911,3 +911,49 @@ describe('parseBattlePostMortem — hpPctBefore from timeline', () => {
     expect(t2.damageOppDealt?.hpPctAfter).toBe(40);
   });
 });
+
+describe('parseBattlePostMortem — failureMessages', () => {
+  it('captures Protect activation', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Protect|p1a: OppMon',
+      '|-singleturn|p1a: OppMon|move: Protect',
+      '|move|p2a: MyMon|Tackle|p1a: OppMon',
+      '|-activate|p1a: OppMon|move: Protect',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.failureMessages.length).toBeGreaterThanOrEqual(1);
+    expect(t.failureMessages.some(m => m.includes('Protect'))).toBe(true);
+  });
+
+  it('captures |hint| messages', () => {
+    const stepQueue = [
+      '|turn|1',
+      '|move|p2a: MyMon|Sleep Talk|p2a: MyMon',
+      '|hint|Sleep Talk failed because the user is not asleep.',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Sleep Talk', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.failureMessages.some(m => m.includes('Sleep Talk'))).toBe(true);
+  });
+
+  it('captures |-fail| events', () => {
+    const stepQueue = [
+      '|turn|1',
+      '|move|p2a: MyMon|Stealth Rock|p1a: OppMon',
+      '|-fail|p2a: MyMon',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Stealth Rock', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.failureMessages.some(m => m.toLowerCase().includes('fail'))).toBe(true);
+  });
+});
