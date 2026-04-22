@@ -332,3 +332,20 @@ describe('parseBattlePostMortem — hazards', () => {
     expect(t.hazardsRemoved).toEqual([{ side: 'mine', name: 'Stealth Rock' }]);
   });
 });
+
+describe('parseBattlePostMortem — team-preview-only', () => {
+  it('returns turns: [] when no |turn|N markers exist', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|clearpoke',
+      '|teampreview',
+    ];
+    const records = [rec({ turn: 0, rqid: 1, final: { bestMove: 'Keldeo', pv: [] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.turns).toEqual([]);
+    expect(pm.totalTurns).toBe(0);
+    expect(pm.winner).toBe(null);
+  });
+});
