@@ -127,7 +127,7 @@ export function parseBattlePostMortem(
       const myFaints = te.faints.filter(f => f.side === 'mine');
       const fainted = myFaints[cursor] ?? null;
       forceSwitchCursor.set(r.turn, cursor + 1);
-      const cause = fainted ? findCauseOfMyFaint(fainted.species, turnBlocks.get(r.turn) || [], meta.mySideId) : null;
+      const cause = fainted ? findCauseOfMyFaint(cursor, turnBlocks.get(r.turn) || [], meta.mySideId) : null;
       const switchInTook = findHazardDamageOnSwitchIn(turnBlocks.get(r.turn) || [], meta.mySideId, cursor);
       turns.push(buildForceSwitchTurnDiff(r, fainted, cause, switchInTook));
     }
@@ -360,11 +360,11 @@ function moveInstanceToOutcome(mi: MoveInstance): MoveOutcome {
   };
 }
 
-function findCauseOfMyFaint(_faintedSpecies: string, block: string[], mySideId: 'p1' | 'p2'): string | null {
-  // Scan the block from start; return the opp move preceding the first
-  // |faint| on my side. Future refinement could pair N-th faint with N-th
-  // preceding opp move, but one faint per turn is the common case.
+function findCauseOfMyFaint(cursor: number, block: string[], mySideId: 'p1' | 'p2'): string | null {
+  // Walk the block tracking the most recent opp |move| at each position.
+  // When we hit the cursor-th mine-side |faint|, return that last opp move.
   let lastOppMove: string | null = null;
+  let mineFaintsSeen = 0;
   for (const line of block) {
     if (line.startsWith('|move|')) {
       const parts = line.split('|').slice(1);
@@ -374,7 +374,10 @@ function findCauseOfMyFaint(_faintedSpecies: string, block: string[], mySideId: 
     } else if (line.startsWith('|faint|')) {
       const parts = line.split('|').slice(1);
       const victim = parts[1] || '';
-      if (classifySide(victim, mySideId) === 'mine') return lastOppMove;
+      if (classifySide(victim, mySideId) === 'mine') {
+        if (mineFaintsSeen === cursor) return lastOppMove;
+        mineFaintsSeen++;
+      }
     }
   }
   return null;

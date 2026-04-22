@@ -249,3 +249,59 @@ describe('parseBattlePostMortem — single force-switch', () => {
     expect(fs.switchInTook?.hpPctLost).toBe(13);
   });
 });
+
+describe('parseBattlePostMortem — double force-switch', () => {
+  it('pairs two same-turn force-switch records with their respective faints and causes', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|-sidestart|p2: Me|move: Stealth Rock',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: A|Aegislash|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Explosion|p2a: A',
+      '|-damage|p2a: A|0 fnt',
+      '|-damage|p1a: OppMon|0 fnt',
+      '|faint|p1a: OppMon',
+      '|faint|p2a: A',
+      '|switch|p2a: B|Blissey|100/100',
+      '|-damage|p2a: B|87/100|[from] Stealth Rock',
+      '|move|p2a: B|Tackle|p1a: OppMon',
+      '|-damage|p1a: OppMon|0 fnt',
+      '|faint|p1a: OppMon',
+      '|move|p1a: OppMon2|Earthquake|p2a: B',
+      '|-damage|p2a: B|0 fnt',
+      '|faint|p2a: B',
+      '|switch|p2a: C|Corviknight|100/100',
+      '|-damage|p2a: C|87/100|[from] Stealth Rock',
+      '|win|Opp',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 1, forceSwitch: false, final: { bestMove: 'Swords Dance', pv: ['you=SWORDSDANCE them=EXPLOSION'] } }),
+      rec({ turn: 1, rqid: 2, forceSwitch: true, tStartMs: 1100, final: { bestMove: 'Blissey', pv: ['you=BLISSEY them=NOMOVE'] } }),
+      rec({ turn: 1, rqid: 3, forceSwitch: true, tStartMs: 1200, final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=NOMOVE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+
+    expect(pm.turns).toHaveLength(3);
+    const fs1 = pm.turns[1] as ForceSwitchTurnDiff;
+    const fs2 = pm.turns[2] as ForceSwitchTurnDiff;
+    // Species pairing
+    expect(fs1.faintedBefore?.species).toBe('A');
+    expect(fs2.faintedBefore?.species).toBe('B');
+    // Cause pairing (the cursor-aware bit): fs1 died to Explosion, fs2 died to Earthquake
+    expect(fs1.faintedBefore?.cause).toBe('Explosion');
+    expect(fs2.faintedBefore?.cause).toBe('Earthquake');
+    // Pick pairing
+    expect(fs1.myPick.name).toBe('Blissey');
+    expect(fs2.myPick.name).toBe('Corviknight');
+    // Switch-in took Stealth Rock damage for fs1's replacement (Blissey at cursor 0)
+    expect(fs1.switchInTook?.from).toBe('Stealth Rock');
+    expect(fs1.switchInTook?.hpPctLost).toBe(13);
+    // And for fs2's replacement (Corviknight at cursor 1)
+    expect(fs2.switchInTook?.from).toBe('Stealth Rock');
+    expect(fs2.switchInTook?.hpPctLost).toBe(13);
+  });
+});
