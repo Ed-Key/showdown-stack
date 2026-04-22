@@ -863,3 +863,51 @@ describe('parseBattlePostMortem — residual damage (unknown/other)', () => {
     expect(x?.category).toBe('other');
   });
 });
+
+describe('parseBattlePostMortem — hpPctBefore from timeline', () => {
+  it('uses real pre-move HP, not 100 default', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Tackle|p1a: OppMon',
+      '|-damage|p1a: OppMon|80/100',
+      '|turn|2',
+      // Opp switches in a chipped mon (via voluntary switch to an existing mon at 60%)
+      '|switch|p1a: OppMon2|Z|60/100',
+      '|move|p2a: MyMon|Tackle|p1a: OppMon2',
+      '|-damage|p1a: OppMon2|30/100',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: [] } }),
+      rec({ turn: 2, rqid: 2, final: { bestMove: 'Tackle', pv: [] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t2 = pm.turns[1] as RegularTurnDiff;
+    expect(t2.damageIDealt?.hpPctBefore).toBe(60);
+    expect(t2.damageIDealt?.hpPctAfter).toBe(30);
+  });
+
+  it('captures correct hpPctBefore across post-chip turns', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Tackle|p2a: MyMon',
+      '|-damage|p2a: MyMon|70/100',
+      '|turn|2',
+      '|move|p1a: OppMon|Tackle|p2a: MyMon',
+      '|-damage|p2a: MyMon|40/100',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: [] } }),
+      rec({ turn: 2, rqid: 2, final: { bestMove: 'Tackle', pv: [] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t2 = pm.turns[1] as RegularTurnDiff;
+    expect(t2.damageOppDealt?.hpPctBefore).toBe(70);
+    expect(t2.damageOppDealt?.hpPctAfter).toBe(40);
+  });
+});

@@ -333,7 +333,11 @@ function extractTurnEvents(
           targetSpecies: speciesFromToken(victim),
         });
       } else if (tag === '-damage' && lastMove && side !== lastMove.attackerSide) {
-        if (lastMove.hpPctBefore == null) lastMove.hpPctBefore = 100;
+        if (lastMove.hpPctBefore == null) {
+          const pos = extractPosition(victim);
+          const prevHp = pos ? lookupHpBefore(hpTimeline, currentEventIndex, pos) : null;
+          lastMove.hpPctBefore = prevHp ?? 100;
+        }
         lastMove.hpPctAfter = parseHpPct(hpToken);
       }
     } else if (tag === 'faint') {
