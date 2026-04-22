@@ -5,6 +5,7 @@ import {
   type DecisionRecordInput,
   type ParseMeta,
   type RegularTurnDiff,
+  type ForceSwitchTurnDiff,
 } from '../utils/post-mortem';
 
 const META: ParseMeta = {
@@ -209,5 +210,42 @@ describe('parseBattlePostMortem — multi-hit moves', () => {
     const t = pm.turns[0] as RegularTurnDiff;
     expect(t.damageIDealt?.hpPctBefore).toBe(100);
     expect(t.damageIDealt?.hpPctAfter).toBe(55);
+  });
+});
+
+describe('parseBattlePostMortem — single force-switch', () => {
+  it('stamps faintedBefore with species + cause, and switchInTook for hazards', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|-sidestart|p2: Me|move: Stealth Rock',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Talonflame|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Ice Beam|p2a: MyMon',
+      '|-damage|p2a: MyMon|0 fnt',
+      '|faint|p2a: MyMon',
+      '|switch|p2a: MyMon2|Corviknight|100/100',
+      '|-damage|p2a: MyMon2|87/100|[from] Stealth Rock',
+      '|win|Opp',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 1, forceSwitch: false, final: { bestMove: 'Brave Bird', pv: ['you=BRAVEBIRD them=ICEBEAM'] } }),
+      rec({ turn: 1, rqid: 2, forceSwitch: true, tStartMs: 1200, final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=NOMOVE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+
+    // Two records on turn 1: regular + force-switch
+    expect(pm.turns).toHaveLength(2);
+    const fs = pm.turns[1] as ForceSwitchTurnDiff;
+    expect(fs.forceSwitch).toBe(true);
+    expect(fs.myPick.name).toBe('Corviknight');
+    expect(fs.myPick.kind).toBe('switch');
+    expect(fs.faintedBefore?.species).toBe('MyMon');
+    expect(fs.faintedBefore?.cause).toBe('Ice Beam');
+    expect(fs.switchInTook?.from).toBe('Stealth Rock');
+    expect(fs.switchInTook?.hpPctLost).toBe(13);
   });
 });

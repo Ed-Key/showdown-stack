@@ -115,13 +115,22 @@ export function parseBattlePostMortem(
     turnEvents.set(turn, extractTurnEvents(turn, block, meta.mySideId));
   }
   const turns: TurnDiff[] = [];
+  // Track in-turn force-switch consumption: walk faints on my side in order.
+  const forceSwitchCursor = new Map<number, number>(); // turn -> next faint index to consume
   for (const r of records) {
     const te = turnEvents.get(r.turn);
     if (!te) continue;
     if (!r.forceSwitch) {
       turns.push(buildRegularTurnDiff(r, te));
+    } else {
+      const cursor = forceSwitchCursor.get(r.turn) ?? 0;
+      const myFaints = te.faints.filter(f => f.side === 'mine');
+      const fainted = myFaints[cursor] ?? null;
+      forceSwitchCursor.set(r.turn, cursor + 1);
+      const cause = fainted ? findCauseOfMyFaint(fainted.species, turnBlocks.get(r.turn) || [], meta.mySideId) : null;
+      const switchInTook = findHazardDamageOnSwitchIn(turnBlocks.get(r.turn) || [], meta.mySideId, cursor);
+      turns.push(buildForceSwitchTurnDiff(r, fainted, cause, switchInTook));
     }
-    // forceSwitch path added in a later task.
   }
   return {
     schemaVersion: POSTMORTEM_SCHEMA_VERSION,
@@ -348,5 +357,95 @@ function moveInstanceToOutcome(mi: MoveInstance): MoveOutcome {
     missed: mi.missed,
     immune: mi.immune,
     failed: mi.failed,
+  };
+}
+
+function findCauseOfMyFaint(_faintedSpecies: string, block: string[], mySideId: 'p1' | 'p2'): string | null {
+  // Scan the block from start; return the opp move preceding the first
+  // |faint| on my side. Future refinement could pair N-th faint with N-th
+  // preceding opp move, but one faint per turn is the common case.
+  let lastOppMove: string | null = null;
+  for (const line of block) {
+    if (line.startsWith('|move|')) {
+      const parts = line.split('|').slice(1);
+      const attacker = parts[1] || '';
+      const side = classifySide(attacker, mySideId);
+      if (side === 'opp') lastOppMove = parts[2] || null;
+    } else if (line.startsWith('|faint|')) {
+      const parts = line.split('|').slice(1);
+      const victim = parts[1] || '';
+      if (classifySide(victim, mySideId) === 'mine') return lastOppMove;
+    }
+  }
+  return null;
+}
+
+function findHazardDamageOnSwitchIn(block: string[], mySideId: 'p1' | 'p2', cursor: number): { hpPctLost: number; from: string } | null {
+  // Find my N-th switch-in (N = cursor, zero-indexed relative to faint cursor),
+  // then look at the next |-damage| with a [from] hazard tag on my side.
+  let mySwitchIns = 0;
+  for (let i = 0; i < block.length; i++) {
+    const line = block[i];
+    if (line.startsWith('|switch|')) {
+      const parts = line.split('|').slice(1);
+      const pos = parts[1] || '';
+      if (classifySide(pos, mySideId) === 'mine') {
+        if (mySwitchIns === cursor) {
+          // Peek at next damage line.
+          for (let j = i + 1; j < block.length; j++) {
+            const next = block[j];
+            if (next.startsWith('|-damage|')) {
+              const np = next.split('|').slice(1);
+              const victim = np[1] || '';
+              if (classifySide(victim, mySideId) === 'mine') {
+                const hpAfter = parseHpPct(np[2]);
+                const fromMatch = next.match(/\[from\]\s*([^|]+)/);
+                if (fromMatch && hpAfter != null) {
+                  const name = fromMatch[1].trim();
+                  const before = parseSwitchInHpBefore(line);
+                  if (before != null) {
+                    return { hpPctLost: before - hpAfter, from: name };
+                  }
+                }
+              }
+              break;
+            }
+            if (next.startsWith('|move|') || next.startsWith('|turn|')) break;
+          }
+        }
+        mySwitchIns++;
+      }
+    }
+  }
+  return null;
+}
+
+function parseSwitchInHpBefore(switchLine: string): number | null {
+  // |switch|p2a: Name|Species|87/100 — last field is HP/Max
+  const parts = switchLine.split('|').slice(1);
+  return parseHpPct(parts[3]);
+}
+
+function buildForceSwitchTurnDiff(
+  r: DecisionRecordInput,
+  fainted: { side: 'mine' | 'opp'; species: string } | null,
+  cause: string | null,
+  switchInTook: { hpPctLost: number; from: string } | null,
+): ForceSwitchTurnDiff {
+  const pv = r.final?.pv ?? [];
+  return {
+    turn: r.turn,
+    forceSwitch: true,
+    rqid: r.rqid,
+    myPick: {
+      kind: 'switch',
+      name: r.final?.bestMove ?? null,
+      confidence: r.final?.confidence ?? null,
+      sims: r.final?.sims ?? null,
+      depth: r.final?.depth ?? null,
+      pv,
+    },
+    faintedBefore: fainted ? { species: fainted.species, cause } : null,
+    switchInTook,
   };
 }
