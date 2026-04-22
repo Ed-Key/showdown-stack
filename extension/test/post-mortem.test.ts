@@ -349,3 +349,27 @@ describe('parseBattlePostMortem — team-preview-only', () => {
     expect(pm.winner).toBe(null);
   });
 });
+
+describe('parseBattlePostMortem — tie', () => {
+  it('returns winner: null for |tie|', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Explosion|p1a: OppMon',
+      '|-damage|p1a: OppMon|0 fnt',
+      '|-damage|p2a: MyMon|0 fnt',
+      '|faint|p1a: OppMon',
+      '|faint|p2a: MyMon',
+      '|tie',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Explosion', pv: ['you=EXPLOSION them=NOMOVE'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.winner).toBe(null);
+    expect(pm.turns).toHaveLength(1);
+  });
+});
