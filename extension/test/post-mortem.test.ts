@@ -187,3 +187,27 @@ describe('parseBattlePostMortem — PV normalization', () => {
     expect(t.pvMatchedReality).toBe(null);
   });
 });
+
+describe('parseBattlePostMortem — multi-hit moves', () => {
+  it('accumulates total damage across three |-damage| events', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Breloom|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Bullet Seed|p1a: OppMon',
+      '|-damage|p1a: OppMon|85/100',
+      '|-damage|p1a: OppMon|70/100',
+      '|-damage|p1a: OppMon|55/100',
+      '|win|Me',
+    ];
+    const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Bullet Seed', pv: ['you=BULLETSEED them=NOMOVE'] } })];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.damageIDealt?.hpPctBefore).toBe(100);
+    expect(t.damageIDealt?.hpPctAfter).toBe(55);
+  });
+});
