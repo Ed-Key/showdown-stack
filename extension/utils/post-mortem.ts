@@ -11,7 +11,7 @@ export type DecisionRecordInput = {
   tStartMs: number;
   tEndMs?: number;
   forceSwitch: boolean;
-  state?: { myActive?: string | null; oppActive?: string | null } | any;
+  state?: unknown;
   final?: {
     bestMove?: string;
     confidence?: number;
