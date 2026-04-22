@@ -576,3 +576,16 @@ export function buildPreBattleState(stepQueue: string[], mySideId: 'p1' | 'p2'):
   const teamPreview = (mine.length || opp.length) ? { mine, opp } : null;
   return { hpTimeline, teamPreview, startedAtMs };
 }
+
+export function lookupHpBefore(
+  timeline: HpTimelineEntry[],
+  beforeIndex: number,
+  position: string
+): number | null {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const e = timeline[i];
+    if (e.eventIndex >= beforeIndex) continue;
+    if (e.position === position) return e.hpPct;
+  }
+  return null;
+}

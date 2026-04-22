@@ -711,3 +711,33 @@ describe('buildPreBattleState — HP timeline', () => {
     expect(pre.hpTimeline.map(e => e.eventIndex)).toEqual([0, 2]);
   });
 });
+
+import { lookupHpBefore } from '../utils/post-mortem';
+
+describe('lookupHpBefore', () => {
+  const tl: HpTimelineEntry[] = [
+    { eventIndex: 0, position: 'p1a', hpPct: 100, event: 'switch' },
+    { eventIndex: 1, position: 'p2a', hpPct: 100, event: 'switch' },
+    { eventIndex: 3, position: 'p2a', hpPct: 75, event: 'damage' },
+    { eventIndex: 5, position: 'p1a', hpPct: 50, event: 'damage' },
+    { eventIndex: 7, position: 'p2a', hpPct: 90, event: 'heal' },
+  ];
+
+  it('returns most recent HP before target index', () => {
+    expect(lookupHpBefore(tl, 4, 'p2a')).toBe(75);
+  });
+
+  it('returns switch-in HP when only switch precedes target', () => {
+    expect(lookupHpBefore(tl, 2, 'p2a')).toBe(100);
+  });
+
+  it('returns null when no prior entry for position', () => {
+    expect(lookupHpBefore(tl, 0, 'p1a')).toBe(null);
+    expect(lookupHpBefore(tl, 1, 'p2a')).toBe(null);
+  });
+
+  it('excludes entries at or after beforeIndex', () => {
+    expect(lookupHpBefore(tl, 3, 'p2a')).toBe(100);
+    expect(lookupHpBefore(tl, 5, 'p1a')).toBe(100);
+  });
+});
