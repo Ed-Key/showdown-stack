@@ -8,6 +8,10 @@ import {
   type RegularTurnDiff,
   type ForceSwitchTurnDiff,
 } from '../utils/post-mortem';
+import {
+  buildPreBattleState,
+  type HpTimelineEntry,
+} from '../utils/post-mortem';
 import fixture from './fixtures/stepqueue-triplej-loss.json';
 
 const META: ParseMeta = {
@@ -640,5 +644,70 @@ describe('parseBattlePostMortem — schema v2', () => {
     const t = pm.turns[0] as RegularTurnDiff;
     expect(Array.isArray(t.residualEvents)).toBe(true);
     expect(t.residualEvents).toEqual([]);
+  });
+});
+
+describe('buildPreBattleState — HP timeline', () => {
+  it('records switch-in HP', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|80/100',
+      '|turn|1',
+    ];
+    const pre = buildPreBattleState(stepQueue, 'p2');
+    const switches = pre.hpTimeline.filter(e => e.event === 'switch');
+    expect(switches).toHaveLength(2);
+    expect(switches[0]).toMatchObject({ position: 'p1a', hpPct: 100, event: 'switch' });
+    expect(switches[1]).toMatchObject({ position: 'p2a', hpPct: 80, event: 'switch' });
+  });
+
+  it('records -damage with post-damage HP', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Tackle|p2a: MyMon',
+      '|-damage|p2a: MyMon|75/100',
+    ];
+    const pre = buildPreBattleState(stepQueue, 'p2');
+    const dmg = pre.hpTimeline.filter(e => e.event === 'damage');
+    expect(dmg).toHaveLength(1);
+    expect(dmg[0]).toMatchObject({ position: 'p2a', hpPct: 75, event: 'damage' });
+  });
+
+  it('records -heal as event heal', () => {
+    const stepQueue = [
+      '|switch|p2a: MyMon|X|50/100',
+      '|turn|1',
+      '|-heal|p2a: MyMon|75/100|[from] item: Leftovers',
+    ];
+    const pre = buildPreBattleState(stepQueue, 'p2');
+    const heals = pre.hpTimeline.filter(e => e.event === 'heal');
+    expect(heals).toHaveLength(1);
+    expect(heals[0]).toMatchObject({ position: 'p2a', hpPct: 75, event: 'heal' });
+  });
+
+  it('records faint with hpPct 0', () => {
+    const stepQueue = [
+      '|switch|p1a: OppMon|X|100/100',
+      '|switch|p2a: MyMon|Y|100/100',
+      '|turn|1',
+      '|-damage|p2a: MyMon|0 fnt',
+      '|faint|p2a: MyMon',
+    ];
+    const pre = buildPreBattleState(stepQueue, 'p2');
+    const faints = pre.hpTimeline.filter(e => e.event === 'faint');
+    expect(faints).toHaveLength(1);
+    expect(faints[0]).toMatchObject({ position: 'p2a', hpPct: 0, event: 'faint' });
+  });
+
+  it('preserves chronological event indices', () => {
+    const stepQueue = [
+      '|switch|p1a: X|X|100/100',   // index 0
+      '|turn|1',                     // index 1
+      '|-damage|p1a: X|80/100',     // index 2
+    ];
+    const pre = buildPreBattleState(stepQueue, 'p2');
+    expect(pre.hpTimeline.map(e => e.eventIndex)).toEqual([0, 2]);
   });
 });

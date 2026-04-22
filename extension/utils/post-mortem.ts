@@ -232,6 +232,12 @@ function classifySide(token: string, mySideId: 'p1' | 'p2'): 'mine' | 'opp' | nu
   return m[1] === mySideId ? 'mine' : 'opp';
 }
 
+function extractPosition(token: string): string | null {
+  // "p1a: Species" -> "p1a"; "p1: Name" -> "p1"
+  const m = token.match(/^(p[12][ab]?)/);
+  return m ? m[1] : null;
+}
+
 function classifySideBase(token: string, mySideId: 'p1' | 'p2'): 'mine' | 'opp' | null {
   const m = token.match(/^(p[12])\b/);
   if (!m) return null;
@@ -532,9 +538,13 @@ export function buildPreBattleState(stepQueue: string[], mySideId: 'p1' | 'p2'):
   const mine: string[] = [];
   const opp: string[] = [];
   let startedAtMs: number | null = null;
-  for (const line of stepQueue) {
+  const hpTimeline: HpTimelineEntry[] = [];
+
+  for (let idx = 0; idx < stepQueue.length; idx++) {
+    const line = stepQueue[idx];
     const parts = line.split('|').slice(1);
     const tag = parts[0];
+
     if (tag === 'poke') {
       const side = parts[1] || '';
       const raw = parts[2] || '';
@@ -545,12 +555,24 @@ export function buildPreBattleState(stepQueue: string[], mySideId: 'p1' | 'p2'):
     } else if (tag === 't:' && startedAtMs == null) {
       const unix = Number(parts[1]);
       if (isFinite(unix)) startedAtMs = unix * 1000;
+    } else if (tag === 'switch' || tag === 'drag') {
+      const pos = extractPosition(parts[1] || '');
+      const hp = parseHpPct(parts[3]);
+      if (pos) hpTimeline.push({ eventIndex: idx, position: pos, hpPct: hp, event: 'switch' });
+    } else if (tag === '-damage') {
+      const pos = extractPosition(parts[1] || '');
+      const hp = parseHpPct(parts[2]);
+      if (pos) hpTimeline.push({ eventIndex: idx, position: pos, hpPct: hp, event: 'damage' });
+    } else if (tag === '-heal') {
+      const pos = extractPosition(parts[1] || '');
+      const hp = parseHpPct(parts[2]);
+      if (pos) hpTimeline.push({ eventIndex: idx, position: pos, hpPct: hp, event: 'heal' });
+    } else if (tag === 'faint') {
+      const pos = extractPosition(parts[1] || '');
+      if (pos) hpTimeline.push({ eventIndex: idx, position: pos, hpPct: 0, event: 'faint' });
     }
   }
+
   const teamPreview = (mine.length || opp.length) ? { mine, opp } : null;
-  return {
-    hpTimeline: [],   // populated in Task 4
-    teamPreview,
-    startedAtMs,
-  };
+  return { hpTimeline, teamPreview, startedAtMs };
 }
