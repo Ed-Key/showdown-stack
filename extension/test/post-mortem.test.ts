@@ -96,3 +96,51 @@ describe('parseBattlePostMortem — happy path', () => {
     expect(t.pvMatchedReality).toBe(true);
   });
 });
+
+describe('parseBattlePostMortem — modifier tags', () => {
+  it('attaches super-effective / resisted / crit / miss / immune / fail to the right move', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Togekiss|100/100',
+      '|switch|p2a: MyMon|Conkeldurr|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Ice Punch|p1a: OppMon',
+      '|-supereffective|p1a: OppMon',
+      '|-crit|p1a: OppMon',
+      '|-damage|p1a: OppMon|10/100',
+      '|move|p1a: OppMon|Flamethrower|p2a: MyMon|[miss]',
+      '|-miss|p1a: OppMon|p2a: MyMon',
+      '|turn|2',
+      '|move|p2a: MyMon|Drain Punch|p1a: OppMon',
+      '|-resisted|p1a: OppMon',
+      '|-damage|p1a: OppMon|5/100',
+      '|move|p1a: OppMon|Thunder Wave|p2a: MyMon',
+      '|-immune|p2a: MyMon',
+      '|turn|3',
+      '|move|p2a: MyMon|Stealth Rock|p1a: MyMon',
+      '|-fail|p2a: MyMon',
+      '|win|Me',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Ice Punch', pv: ['you=ICEPUNCH them=FLAMETHROWER'] } }),
+      rec({ turn: 2, rqid: 2, final: { bestMove: 'Drain Punch', pv: ['you=DRAINPUNCH them=THUNDERWAVE'] } }),
+      rec({ turn: 3, rqid: 3, final: { bestMove: 'Stealth Rock', pv: ['you=STEALTHROCK them=NOMOVE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+
+    const t1 = pm.turns[0] as RegularTurnDiff;
+    expect(t1.damageIDealt?.superEffective).toBe(true);
+    expect(t1.damageIDealt?.crit).toBe(true);
+    expect(t1.damageOppDealt?.missed).toBe(true);
+
+    const t2 = pm.turns[1] as RegularTurnDiff;
+    expect(t2.damageIDealt?.resisted).toBe(true);
+    expect(t2.damageOppDealt?.immune).toBe(true);
+
+    const t3 = pm.turns[2] as RegularTurnDiff;
+    expect(t3.damageIDealt?.failed).toBe(true);
+  });
+});

@@ -260,6 +260,31 @@ function extractTurnEvents(turn: number, block: string[], mySideId: 'p1' | 'p2')
       const victim = parts[1] || '';
       const side = classifySide(victim, mySideId);
       if (side) te.faints.push({ side, species: speciesFromToken(victim) });
+    } else if (tag === '-supereffective') {
+      if (lastMove) lastMove.superEffective = true;
+    } else if (tag === '-resisted') {
+      if (lastMove) lastMove.resisted = true;
+    } else if (tag === '-crit') {
+      if (lastMove) lastMove.crit = true;
+    } else if (tag === '-miss') {
+      // |-miss|attacker|target — flag the attacker's last move as missed
+      const attacker = parts[1] || '';
+      const side = classifySide(attacker, mySideId);
+      const target = side === 'mine' ? te.myMove : side === 'opp' ? te.oppMove : null;
+      if (target) target.missed = true;
+    } else if (tag === '-immune') {
+      // |-immune|victim — flag the attacker's last move as immune
+      const victim = parts[1] || '';
+      const victimSide = classifySide(victim, mySideId);
+      // The attacker is the OTHER side's last move.
+      const attackerMove = victimSide === 'mine' ? te.oppMove : victimSide === 'opp' ? te.myMove : null;
+      if (attackerMove) attackerMove.immune = true;
+    } else if (tag === '-fail') {
+      // |-fail|attacker — flag attacker's last move as failed
+      const attacker = parts[1] || '';
+      const side = classifySide(attacker, mySideId);
+      const attackerMove = side === 'mine' ? te.myMove : side === 'opp' ? te.oppMove : null;
+      if (attackerMove) attackerMove.failed = true;
     }
   }
   return te;
