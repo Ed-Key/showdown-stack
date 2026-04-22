@@ -13,6 +13,7 @@ import {
   type HpTimelineEntry,
 } from '../utils/post-mortem';
 import fixture from './fixtures/stepqueue-triplej-loss.json';
+import phase2Fixture from './fixtures/stepqueue-phase2.json';
 
 const META: ParseMeta = {
   battleId: 'synthetic-1',
@@ -955,5 +956,50 @@ describe('parseBattlePostMortem — failureMessages', () => {
     const pm = parseBattlePostMortem(records, stepQueue, META);
     const t = pm.turns[0] as RegularTurnDiff;
     expect(t.failureMessages.some(m => m.toLowerCase().includes('fail'))).toBe(true);
+  });
+});
+
+describe('parseBattlePostMortem — Phase 2 integration', () => {
+  const pm = parseBattlePostMortem(
+    phase2Fixture.scHistoryForBattle as DecisionRecordInput[],
+    phase2Fixture.stepQueue,
+    {
+      battleId: phase2Fixture.meta.battleId,
+      format: phase2Fixture.meta.format,
+      myUsername: phase2Fixture.meta.myUsername,
+      mySideId: phase2Fixture.meta.mySideId as 'p1' | 'p2',
+      opponent: phase2Fixture.meta.opponent,
+    },
+  );
+
+  it('parses without throwing', () => {
+    expect(pm).toBeTruthy();
+  });
+  it('emits schemaVersion 2', () => {
+    expect(pm.schemaVersion).toBe(2);
+  });
+  it('populates teamPreview with 6 mons per side', () => {
+    expect(pm.teamPreview).toBeTruthy();
+    expect(pm.teamPreview?.mine.length).toBe(6);
+    expect(pm.teamPreview?.opp.length).toBe(6);
+  });
+  it('populates startedAtMs before endedAtMs', () => {
+    expect(pm.startedAtMs).not.toBe(null);
+    expect(pm.startedAtMs!).toBeLessThan(pm.endedAtMs);
+  });
+  it('captures at least one residual event across the battle', () => {
+    const total = pm.turns.reduce((acc, t) => acc + (t.residualEvents?.length ?? 0), 0);
+    expect(total).toBeGreaterThanOrEqual(1);
+  });
+  it('at least one post-turn-1 move has hpPctBefore below 100', () => {
+    const chipHits = pm.turns.filter(t =>
+      !t.forceSwitch &&
+      t.turn > 1 &&
+      (t.damageIDealt?.hpPctBefore != null && t.damageIDealt.hpPctBefore < 100)
+    );
+    expect(chipHits.length).toBeGreaterThanOrEqual(1);
+  });
+  it('winner matches fixture meta', () => {
+    expect(pm.winner).toBe(phase2Fixture.meta.winner);
   });
 });
