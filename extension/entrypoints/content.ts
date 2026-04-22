@@ -151,7 +151,7 @@ export default defineContentScript({
     }
 
     // ---- translation: Showdown battle → poke-engine payload --------------
-    function buildMyPokemon(p: any) {
+    function buildMyPokemon(p: any, activeMoves: any[] | null = null) {
       const speciesRaw = p.speciesForme || p.species;
       return {
         species: norm(speciesRaw),
@@ -170,7 +170,15 @@ export default defineContentScript({
         speed: p.stats?.spe || 100,
         status: STATUS[(p.status || '').toLowerCase()] || 'None',
         restTurns: 0, sleepTurns: 0, weightKg: 0.0,
-        moves: padMoves((p.moves || []).map((m: string) => ({ id: norm(m), pp: 8 }))),
+        moves: padMoves((p.moves || []).map((m: string) => {
+          const id = norm(m);
+          const rm = activeMoves?.find((am: any) => norm(am.id) === id);
+          return {
+            id,
+            pp: rm?.pp ?? 8,
+            disabled: !!rm?.disabled,
+          };
+        })),
         terastallized: !!p.terastallized,
         teraType: p.teraType || '',
       };
@@ -257,7 +265,7 @@ export default defineContentScript({
       return out;
     }
 
-    function buildSide(mons: any[], activeIdx: number, boosts: any, rawSide: any) {
+    function buildSide(mons: any[], activeIdx: number, boosts: any, rawSide: any, req: any = null) {
       const out = mons.slice();
       while (out.length < 6) out.push(emptyPokemon());
       return {
@@ -272,11 +280,11 @@ export default defineContentScript({
           specialDefense: boosts?.spd || 0,
           speed: boosts?.spe || 0,
         },
-        forceTrapped: false,
+        forceTrapped: !!req?.active?.[0]?.trapped,
       };
     }
 
-    function translate(b: any) {
+    function translate(b: any, req: any = null) {
       const mySide = b.mySide;
       const farSide = b.farSide;
       const myActive = mySide?.active?.[0];
@@ -287,7 +295,13 @@ export default defineContentScript({
           norm(p.speciesForme || p.species) === target);
         if (myActiveIdx < 0) myActiveIdx = 0;
       }
-      const myMons = (b.myPokemon || []).map(buildMyPokemon);
+      // Overlay Showdown's per-move `disabled` flag and current PP from
+      // req.active[0].moves onto the active-slot Pokemon only. On force-switch
+      // / team-preview requests `req.active` is undefined, so activeMoves is
+      // null and we fall back to the existing pp=8, disabled=false defaults.
+      const myActiveMoves = req?.active?.[0]?.moves ?? null;
+      const myMons = (b.myPokemon || []).map((p: any, i: number) =>
+        buildMyPokemon(p, i === myActiveIdx ? myActiveMoves : null));
       const oppMons = (farSide?.pokemon || []).map(buildOppPokemon);
       const oppActive = farSide?.active?.[0];
       let oppActiveIdx = 0;
@@ -297,7 +311,7 @@ export default defineContentScript({
       }
       const weather = (b.weather || '').toLowerCase();
       return {
-        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide),
+        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide, req),
         sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide),
         weather: {
           weatherType: weather || 'none',
@@ -898,7 +912,7 @@ export default defineContentScript({
       }
 
       try {
-        const payload = translate(b);
+        const payload = translate(b, req);
         // Guard: refuse to POST if active opp's types didn't resolve. Empty
         // types silently downgrade to Typeless on the engine side, which
         // broke immunity checks (observed 2026-04-20: Togekiss with types=[]
