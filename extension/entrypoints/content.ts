@@ -699,8 +699,9 @@ export default defineContentScript({
         const k = localStorage.key(i);
         if (!k || !k.startsWith('sc:postmortem:')) continue;
         try {
-          const pm = JSON.parse(localStorage.getItem(k) || '') as BattlePostMortem;
-          out.push(pm);
+          const pm = JSON.parse(localStorage.getItem(k) || '');
+          if (pm?.schemaVersion !== 2) continue;
+          out.push(pm as BattlePostMortem);
         } catch {}
       }
       out.sort((a, b) => b.endedAtMs - a.endedAtMs);
