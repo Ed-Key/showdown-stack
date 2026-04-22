@@ -724,6 +724,31 @@ export default defineContentScript({
       return keys.length;
     };
 
+    (win as any).__scPostMortemMigrate = (): { cleared: number; kept: number } => {
+      let cleared = 0;
+      let kept = 0;
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith('sc:postmortem:')) continue;
+        try {
+          const pm = JSON.parse(localStorage.getItem(k) || '');
+          if (pm?.schemaVersion !== 2) {
+            toRemove.push(k);
+            cleared++;
+          } else {
+            kept++;
+          }
+        } catch {
+          toRemove.push(k);
+          cleared++;
+        }
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+      console.log(`[sc:postmortem] migrate cleared=${cleared} kept=${kept}`);
+      return { cleared, kept };
+    };
+
     setInterval(() => {
       const rooms = win.app?.rooms;
       if (!rooms) { trace('no-rooms'); return; }
