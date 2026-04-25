@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import random
+from copy import copy
 from typing import Any
 
 from battle_testing.adapter import BattleAdapter
@@ -28,6 +30,7 @@ class SpectatorAdapter:
         priors: PriorsSource,
         use_pimc: bool = False,
         pimc_k: int = 4,
+        pimc_seed: int | None = None,
     ):
         self._own_team: list[PokemonSpec] = parse_team_file(own_paste)
         self._format = format
@@ -36,6 +39,7 @@ class SpectatorAdapter:
         self._opp_specs: dict[str, PokemonSpec] = {}
         self._use_pimc = use_pimc
         self._pimc_k = pimc_k
+        self._pimc_seed = pimc_seed
         # Per-species record of what info has been revealed by on_reveal.
         # Used to override sampled values during PIMC hypothesis construction.
         self._revealed: dict[str, dict] = {}  # species_norm -> {item, ability, moves}
@@ -43,6 +47,7 @@ class SpectatorAdapter:
     def on_team_preview(self, opponent_species: list[str]) -> None:
         """Called with the 6 species names revealed at team preview."""
         self._opp_specs.clear()
+        self._revealed.clear()
         for species in opponent_species:
             modal = self._priors.get_set(
                 species=species, format=self._format, team_type=self._team_type,
@@ -97,7 +102,6 @@ class SpectatorAdapter:
     ):
         """Apply revealed-info (from on_reveal) on top of a sampled ModalSet.
         Returns a new ModalSet with revealed fields forced in."""
-        from copy import copy
         rec = self._revealed.get(norm_species)
         if not rec:
             return sampled
@@ -146,8 +150,7 @@ class SpectatorAdapter:
         When use_pimc=True, returns {"hypotheses": [BattleRequest, ...]} of length pimc_k.
         Otherwise returns a single BattleRequest (current behavior)."""
         if self._use_pimc:
-            import random
-            rng = random.Random()
+            rng = random.Random(self._pimc_seed) if self._pimc_seed is not None else random.Random()
             hypotheses = []
             for _ in range(self._pimc_k):
                 sampled_specs = self._sample_one_hypothesis(rng)
