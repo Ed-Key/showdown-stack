@@ -131,12 +131,9 @@ def test_on_reveal_unknown_species_is_noop():
 def fake_priors_pimc(tmp_path):
     """A PriorsSource backed by a tiny in-tmp chaos JSON for two species.
 
-    NOTE: keys appear under BOTH capitalized ("Garchomp") and normalized
-    ("garchomp") forms because get_set is called with the original casing
-    from on_team_preview while sample_set is called with the normalized
-    species pulled off PokemonSpec.species (always lowercase). Without the
-    duplicated keys the sampler falls through to the neutral default and
-    loses RNG diversity, which masks real determinism bugs.
+    Keys are display-cased to match real Smogon chaos JSON shape. The
+    SpectatorAdapter is responsible for preserving display casing through
+    to the sample_set call site.
     """
     species_data = {
         "Garchomp": {
@@ -154,14 +151,8 @@ def fake_priors_pimc(tmp_path):
             "Tera Types": {"Dragon": 50, "Fairy": 30, "Steel": 20},
         },
     }
-    # Mirror under normalized keys so sample_set (called with lowercase
-    # species) finds the entry too.
-    data_block = {}
-    for k, v in species_data.items():
-        data_block[k] = v
-        data_block[k.lower()] = v
     fake = tmp_path / "gen9ou-1500.json"
-    fake.write_text(json.dumps({"data": data_block}))
+    fake.write_text(json.dumps({"data": species_data}))
     return PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
 
 

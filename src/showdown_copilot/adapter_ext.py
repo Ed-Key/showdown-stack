@@ -43,17 +43,23 @@ class SpectatorAdapter:
         # Per-species record of what info has been revealed by on_reveal.
         # Used to override sampled values during PIMC hypothesis construction.
         self._revealed: dict[str, dict] = {}  # species_norm -> {item, ability, moves}
+        # Display-cased species names, indexed by normalized key.
+        # Needed to preserve the casing Smogon's chaos JSON uses for lookup.
+        self._opp_display_names: dict[str, str] = {}
 
     def on_team_preview(self, opponent_species: list[str]) -> None:
         """Called with the 6 species names revealed at team preview."""
         self._opp_specs.clear()
         self._revealed.clear()
+        self._opp_display_names.clear()
         for species in opponent_species:
+            norm = _normalize(species)
+            self._opp_display_names[norm] = species
             modal = self._priors.get_set(
                 species=species, format=self._format, team_type=self._team_type,
             )
             spec = modal.to_pokemon_spec()
-            self._opp_specs[_normalize(species)] = spec
+            self._opp_specs[norm] = spec
         logger.info(
             "team preview: loaded modal sets for %d opponents (format=%s, team_type=%s)",
             len(self._opp_specs), self._format, self._team_type,
@@ -131,11 +137,17 @@ class SpectatorAdapter:
 
     def _sample_one_hypothesis(self, rng) -> dict[str, "PokemonSpec"]:
         """Sample one team-wide hypothesis. Each opp species is sampled
-        independently; revealed info is merged in via _merge_revealed_into_sample."""
+        independently; revealed info is merged in via _merge_revealed_into_sample.
+
+        Note: passes the display-cased species name (not the normalized key) to
+        the priors API because Smogon's chaos JSON is keyed by display name.
+        Falls back to current_spec.species if display name was somehow lost.
+        """
         out: dict[str, "PokemonSpec"] = {}
         for norm_species, current_spec in self._opp_specs.items():
+            display_name = self._opp_display_names.get(norm_species, current_spec.species)
             sampled = self._priors.sample_set(
-                species=current_spec.species,
+                species=display_name,
                 format=self._format,
                 team_type=self._team_type,
                 rng=rng,
