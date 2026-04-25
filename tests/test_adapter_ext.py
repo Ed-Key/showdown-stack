@@ -118,3 +118,110 @@ def test_on_reveal_unknown_species_is_noop():
     # Not in _opp_specs — must not raise
     sa.on_reveal("Kingambit", revealed_move="Sucker Punch")
     assert "kingambit" not in sa._opp_specs
+
+
+# ---------------- PIMC path tests (Plan G' Task 4) ----------------
+
+import json
+import pytest
+
+from showdown_copilot.priors import PriorsSource
+
+
+@pytest.fixture
+def fake_priors_pimc(tmp_path):
+    """A PriorsSource backed by a tiny in-tmp chaos JSON for two species."""
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {"earthquake": 50, "stealthrock": 40, "spikes": 30, "dragontail": 20, "swordsdance": 15, "scaleshot": 10},
+                "Items": {"rockyhelmet": 50, "lifeorb": 40, "leftovers": 20},
+                "Abilities": {"roughskin": 90, "sandveil": 10},
+                "Spreads": {"Jolly:0/252/0/0/4/252": 80, "Adamant:0/252/0/0/4/252": 20},
+                "Tera Types": {"Steel": 50, "Fire": 30, "Ground": 20},
+            },
+            "Corviknight": {
+                "Moves": {"roost": 60, "bodypress": 40, "irondefense": 30, "uturn": 25, "defog": 20, "bravebird": 15},
+                "Items": {"leftovers": 60, "rockyhelmet": 30, "heavydutyboots": 10},
+                "Abilities": {"pressure": 50, "mirrorarmor": 40, "unnerve": 10},
+                "Spreads": {"Impish:248/0/252/0/8/0": 70, "Careful:248/0/0/0/252/8": 30},
+                "Tera Types": {"Dragon": 50, "Fairy": 30, "Steel": 20},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    return PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+
+
+@pytest.fixture
+def own_paste_pimc():
+    """Minimal team paste — content doesn't matter for these tests, the BattleAdapter parses it."""
+    return """\
+Iron Hands @ Choice Band
+Ability: Quark Drive
+Tera Type: Fighting
+EVs: 252 HP / 252 Atk / 4 Def
+Adamant Nature
+- Drain Punch
+- Wild Charge
+- Heavy Slam
+- Earthquake
+"""
+
+
+def _setup_adapter_pimc(fake_priors, own_paste, **kwargs):
+    a = SpectatorAdapter(
+        own_paste=own_paste,
+        format="gen9ou",
+        team_type=None,
+        priors=fake_priors,
+        **kwargs,
+    )
+    a.on_team_preview(["Garchomp", "Corviknight"])
+    return a
+
+
+def _make_fake_battle():
+    battle = MagicMock()
+    battle.team = {}
+    battle.opponent_team = {}
+    battle.active_pokemon = None
+    battle.opponent_active_pokemon = None
+    battle.side_conditions = {}
+    battle.opponent_side_conditions = {}
+    battle.weather = {}
+    battle.fields = {}
+    return battle
+
+
+def test_adapter_pimc_off_payload_unchanged(fake_priors_pimc, own_paste_pimc):
+    """When use_pimc=False, to_engine_json returns the same shape as today."""
+    a = _setup_adapter_pimc(fake_priors_pimc, own_paste_pimc, use_pimc=False)
+    fake_battle = _make_fake_battle()
+    out = a.to_engine_json(fake_battle)
+    assert "hypotheses" not in out
+
+
+def test_adapter_pimc_on_emits_k_hypotheses(fake_priors_pimc, own_paste_pimc):
+    """When use_pimc=True, output is {'hypotheses': [...]} of length pimc_k."""
+    a = _setup_adapter_pimc(fake_priors_pimc, own_paste_pimc, use_pimc=True, pimc_k=4)
+    fake_battle = _make_fake_battle()
+    out = a.to_engine_json(fake_battle)
+    assert "hypotheses" in out
+    assert isinstance(out["hypotheses"], list)
+    assert len(out["hypotheses"]) == 4
+
+
+def test_adapter_revealed_move_in_all_hypotheses(fake_priors_pimc, own_paste_pimc):
+    """After on_reveal, every PIMC hypothesis must contain the revealed move."""
+    a = _setup_adapter_pimc(fake_priors_pimc, own_paste_pimc, use_pimc=True, pimc_k=8)
+    a.on_reveal("Corviknight", revealed_move="irondefense")
+    fake_battle = _make_fake_battle()
+    out = a.to_engine_json(fake_battle)
+    found_count = 0
+    for h in out["hypotheses"]:
+        h_str = json.dumps(h).lower()
+        if "irondefense" in h_str:
+            found_count += 1
+    assert found_count == 8, f"only {found_count}/8 hypotheses contain revealed move 'irondefense'"
