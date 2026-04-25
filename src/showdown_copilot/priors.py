@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,38 @@ def _top_key(d: dict[str, float]) -> str | None:
 
 def _top_n_keys(d: dict[str, float], n: int) -> list[str]:
     return [k for k, _ in sorted(d.items(), key=lambda kv: -kv[1])[:n]]
+
+
+def _weighted_pick(d: dict[str, float], rng: random.Random) -> str | None:
+    """Weighted-random pick from a {key: weight} mapping. Returns None if empty."""
+    if not d:
+        return None
+    keys = list(d.keys())
+    weights = [d[k] for k in keys]
+    total = sum(weights)
+    if total <= 0:
+        return None
+    return rng.choices(keys, weights=weights, k=1)[0]
+
+
+def _weighted_pick_n_distinct(d: dict[str, float], n: int, rng: random.Random) -> list[str]:
+    """Pick up to n distinct keys, weighted by their values, without replacement."""
+    if not d or n <= 0:
+        return []
+    pool = dict(d)
+    out: list[str] = []
+    for _ in range(n):
+        if not pool:
+            break
+        keys = list(pool.keys())
+        weights = [pool[k] for k in keys]
+        total = sum(weights)
+        if total <= 0:
+            break
+        chosen = rng.choices(keys, weights=weights, k=1)[0]
+        out.append(chosen)
+        del pool[chosen]
+    return out
 
 
 class PriorsSource:
@@ -148,3 +181,71 @@ class PriorsSource:
             tera_type=tera,
             weight_kg=0.0,
         )
+
+    def sample_set(
+        self,
+        species: str,
+        format: str,
+        team_type: str | None = None,
+        rng: random.Random | None = None,
+    ) -> ModalSet:
+        """Like get_set, but every field is weighted-random-drawn from the chaos
+        distribution rather than picked modally. Same return shape.
+
+        Used by PIMC outer loop to generate K diverse opponent-team hypotheses.
+        """
+        if rng is None:
+            rng = random.Random()
+        chaos = self._ensure_loaded(format)
+        data = chaos.get("data", {})
+
+        entry = None
+        if team_type and format.startswith("gen9monotype"):
+            entry = data.get(f"{species} ({team_type})")
+        if entry is None:
+            entry = data.get(species)
+        if entry is None:
+            logger.warning(
+                "no chaos entry for %s (type=%s) in %s — neutral default (sample)",
+                species, team_type, format,
+            )
+            return self._neutral_default(species)
+
+        moves = _weighted_pick_n_distinct(entry.get("Moves", {}), 4, rng)
+        item = _weighted_pick(entry.get("Items", {}), rng) or "none"
+        ability = _weighted_pick(entry.get("Abilities", {}), rng) or "none"
+        spread_key = _weighted_pick(entry.get("Spreads", {}), rng)
+        if spread_key:
+            nature, evs = _parse_spread(spread_key)
+        else:
+            nature = "Serious"
+            evs = {k: 0 for k in ("hp", "atk", "def", "spa", "spd", "spe")}
+        tera = _weighted_pick(entry.get("Tera Types", {}), rng) or ""
+
+        return ModalSet(
+            species=_normalize(species),
+            level=100,
+            types=[],
+            moves=moves,
+            item=_normalize(item),
+            ability=_normalize(ability),
+            nature=nature,
+            evs=evs,
+            ivs={k: 31 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            stats={k: 100 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            tera_type=tera,
+            weight_kg=0.0,
+        )
+
+    def sample_k_sets(
+        self,
+        species: str,
+        k: int,
+        format: str,
+        team_type: str | None = None,
+        rng: random.Random | None = None,
+    ) -> list[ModalSet]:
+        """Return K independent sample_set draws for one species."""
+        if rng is None:
+            rng = random.Random()
+        return [self.sample_set(species, format, team_type, rng) for _ in range(k)]
