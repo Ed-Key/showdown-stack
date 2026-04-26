@@ -12,8 +12,12 @@ class StubPriors:
     """Test double for PriorsSource."""
     def __init__(self, returns: dict[str, ModalSet]):
         self._returns = returns
+        # Capture the most recent belief argument so tests can assert that
+        # the adapter is plumbing belief through into get_set (Plan H Task 3).
+        self.last_belief = None
 
-    def get_set(self, species, format, team_type=None):
+    def get_set(self, species, format, team_type=None, belief=None):
+        self.last_belief = belief
         return self._returns[species.lower()]
 
 
@@ -281,3 +285,162 @@ def test_adapter_pimc_no_seed_yields_different_hypotheses(fake_priors_pimc, own_
     # If both are identical that's a 1-in-(billions) chance with diverse priors;
     # treat it as a sampler-narrowness signal, not a flake. But assert anyway.
     assert s1 != s2, "two unseeded calls produced identical output — sampler may be too narrow"
+
+
+# ---------------- Plan H Task 3: BeliefTracker migration ----------------
+
+
+def test_constructor_accepts_belief_tracker_kwarg():
+    """Adapter accepts a pre-built BeliefTracker via the new kwarg, and uses it."""
+    from showdown_copilot.belief import BeliefTracker
+
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    tracker = BeliefTracker()
+    # Pre-seed the tracker so we can verify the adapter uses *this* instance,
+    # not a fresh one of its own.
+    tracker.on_reveal_move("Garchomp", "Earthquake")
+
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9monotype",
+        team_type="Ground", priors=priors,
+        belief_tracker=tracker,
+    )
+    # The adapter's tracker IS the one we passed in.
+    assert sa._belief is tracker
+    # The pre-seeded reveal survives. Note: on_team_preview is NOT called here,
+    # so the tracker is not reset — this is the documented "preserve preexisting
+    # state across construction" path.
+    assert "earthquake" in sa._belief.get("Garchomp").revealed_moves
+
+
+def test_constructor_default_creates_fresh_belief_tracker():
+    """Without belief_tracker kwarg, adapter constructs its own BeliefTracker."""
+    from showdown_copilot.belief import BeliefTracker
+
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9monotype",
+        team_type="Ground", priors=priors,
+    )
+    assert isinstance(sa._belief, BeliefTracker)
+
+
+def test_on_reveal_delegates_to_belief_tracker():
+    """on_reveal updates the BeliefTracker (revealed_moves/item/ability) in addition
+    to mutating _opp_specs. Plan H Task 3 contract."""
+    priors = StubPriors({"garchomp": _modal(
+        "garchomp", moves=["earthquake", "dragontail", "stealthrock", "stoneedge"],
+    )})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+
+    sa.on_reveal(
+        "Garchomp",
+        revealed_move="Swords Dance",
+        revealed_item="Choice Scarf",
+        revealed_ability="Rough Skin",
+    )
+
+    belief = sa._belief.get("Garchomp")
+    assert "swordsdance" in belief.revealed_moves
+    assert belief.revealed_item == "choicescarf"
+    assert belief.revealed_ability == "roughskin"
+
+
+def test_on_team_preview_resets_belief_tracker():
+    """on_team_preview must clear the belief tracker, not just _opp_specs."""
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    sa.on_reveal("Garchomp", revealed_move="Earthquake")
+    assert "earthquake" in sa._belief.get("Garchomp").revealed_moves
+
+    # New battle starts — preview must reset belief.
+    sa.on_team_preview(["Garchomp"])
+    assert "earthquake" not in sa._belief.get("Garchomp").revealed_moves
+
+
+def test_to_engine_json_passes_belief_to_get_set():
+    """to_engine_json must plumb the per-species belief into priors.get_set
+    so the chaos-set candidate filter (Plan H Task 2) is consulted."""
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    sa.on_reveal("Garchomp", revealed_move="Earthquake")
+
+    fake_battle = _make_fake_battle()
+    sa.to_engine_json(fake_battle)
+
+    # StubPriors captured the last belief argument; it should be the
+    # OpponentBelief that holds the revealed move.
+    assert priors.last_belief is not None
+    assert priors.last_belief.species == "garchomp"
+    assert "earthquake" in priors.last_belief.revealed_moves
+
+
+def test_to_engine_json_belief_aware_modal_matches_priors_direct():
+    """to_engine_json should produce a payload that reflects the belief-aware
+    modal — i.e., the same modal that priors.get_set(belief=...) returns.
+
+    This uses the real PriorsSource (chaos JSON fixture from PIMC tests) so
+    we exercise the actual filter logic (not just the StubPriors capture)."""
+    from showdown_copilot.priors import PriorsSource as RealPriorsSource
+
+    # Mirror the fake_priors_pimc fixture inline for this test
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from pathlib import Path
+        species_data = {
+            "Corviknight": {
+                "Moves": {"roost": 60, "bodypress": 40, "irondefense": 30, "uturn": 25, "defog": 20, "bravebird": 15},
+                "Items": {"leftovers": 60, "rockyhelmet": 30, "heavydutyboots": 10},
+                "Abilities": {"pressure": 50, "mirrorarmor": 40, "unnerve": 10},
+                "Spreads": {"Impish:248/0/252/0/8/0": 70, "Careful:248/0/0/0/252/8": 30},
+                "Tera Types": {"Dragon": 50, "Fairy": 30, "Steel": 20},
+            },
+        }
+        fake = Path(td) / "gen9ou-1500.json"
+        fake.write_text(json.dumps({"data": species_data}))
+        priors = RealPriorsSource(cache_dir=Path(td), rating=1500, month="2026-04")
+
+        sa = SpectatorAdapter(
+            own_paste="""\
+Iron Hands @ Choice Band
+Ability: Quark Drive
+Tera Type: Fighting
+EVs: 252 HP / 252 Atk / 4 Def
+Adamant Nature
+- Drain Punch
+- Wild Charge
+- Heavy Slam
+- Earthquake
+""",
+            format="gen9ou", team_type=None, priors=priors,
+        )
+        sa.on_team_preview(["Corviknight"])
+        # Reveal a non-modal move; the belief-aware modal MUST include it.
+        sa.on_reveal("Corviknight", revealed_move="bravebird")
+
+        fake_battle = _make_fake_battle()
+        out = sa.to_engine_json(fake_battle)
+
+        # The independent reference: get_set with the same belief should
+        # produce a modal whose moves include 'bravebird'.
+        ref = priors.get_set(
+            species="Corviknight", format="gen9ou", team_type=None,
+            belief=sa._belief.get("Corviknight"),
+        )
+        assert "bravebird" in ref.moves, "sanity check: ref modal includes revealed move"
+        # And the actual adapter output must contain it too (json contains it
+        # because the inner BattleAdapter serializes the opp moves into sideTwo).
+        assert "bravebird" in json.dumps(out).lower()
+
+
+def test_revealed_dict_attribute_removed():
+    """The Plan G' Task 4 _revealed dict has been replaced with _belief."""
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    assert not hasattr(sa, "_revealed"), (
+        "_revealed dict should be gone — replaced by _belief BeliefTracker"
+    )
+    assert hasattr(sa, "_belief")
