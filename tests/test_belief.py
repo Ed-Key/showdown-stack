@@ -259,3 +259,54 @@ def test_R5_revealed_ability_overrides_false_impossibility():
     # impossible_abilities still contains the entry — this is fine; the
     # priors filter prefers revealed_ability when set.
     assert "intimidate" in b.impossible_abilities
+
+
+# ---------- R2 (Task 5): status-move usage rules out Assault Vest ----------
+
+
+def test_R2_status_move_adds_assault_vest():
+    """Opp uses a status-category move (Recover) → AV is ruled out
+    (AV blocks the holder from using non-damaging moves)."""
+    t = BeliefTracker()
+    t.on_switch_in("Toxapex")
+    t.on_move(
+        "Toxapex", "Recover",
+        split_msg=["|move|", "p2a: Toxapex", "Recover"],
+    )
+    b = t.get("Toxapex")
+    assert "assaultvest" in b.impossible_items
+    assert b.used_status_move is True
+
+
+def test_R2_no_av_on_damaging_only():
+    """Opp uses only damaging moves (Earthquake) → AV is NOT ruled out;
+    AV holders CAN use damaging moves, so no inference fires."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move(
+        "Garchomp", "Earthquake",
+        split_msg=["|move|", "p2a: Garchomp", "Earthquake"],
+    )
+    b = t.get("Garchomp")
+    assert "assaultvest" not in b.impossible_items
+    assert b.used_status_move is False
+
+
+def test_R2_sleep_talk_does_not_fire():
+    """REGRESSION: the Sleep-Talk poisoning case. A Choice-Specs Lapras
+    Sleep-Talks Soak (a status move). Naive R2 would rule out AV based
+    on Soak being status — but the [from]-guard suppresses the firing
+    because the move was Sleep-Talk-driven, not the mover's free choice.
+    Also: revealed_moves should NOT include Soak (passive moves don't
+    reveal that the move was *intentionally* in the moveset)."""
+    t = BeliefTracker()
+    t.on_switch_in("Lapras")
+    t.on_move(
+        "Lapras", "Soak",
+        split_msg=["|move|", "p2a: Lapras", "Soak", "p1a: Garchomp", "[from]Sleep Talk"],
+    )
+    b = t.get("Lapras")
+    assert "assaultvest" not in b.impossible_items
+    assert b.used_status_move is False
+    # Passive move → revealed_moves not updated
+    assert "soak" not in b.revealed_moves

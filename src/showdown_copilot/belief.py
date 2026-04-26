@@ -19,6 +19,45 @@ def _normalize(name: str) -> str:
     return "".join(c.lower() for c in name if c.isalnum())
 
 
+# Status moves (category = "Status" in poke-env / Showdown). This is a
+# Phase 1 hardcoded subset covering the most-used status moves on
+# competitive ladder. Phase 2 should replace this with a lookup against
+# poke-env's Move.category or a generated complete list.
+#
+# NOTE: Knock Off, U-turn, Volt Switch, Flip Turn, Parting Shot, and
+# Teleport are EXCLUDED — they are damaging (or in Teleport's case,
+# gen8+ pivoting) moves and AV holders CAN use them. Including them
+# would mis-fire R2 and incorrectly rule out AV.
+_STATUS_MOVES: frozenset[str] = frozenset({
+    "stealthrock", "spikes", "toxicspikes", "stickyweb",
+    "willowisp", "toxic", "thunderwave", "glare", "sleeppowder",
+    "spore", "yawn", "lovelykiss",
+    "swordsdance", "nastyplot", "calmmind", "bulkup", "irondefense",
+    "shellsmash", "dragondance", "quiverdance", "tailglow",
+    "roost", "recover", "softboiled", "synthesis", "moonlight",
+    "morningsun", "milkdrink", "wish", "healingwish",
+    "protect", "detect", "kingsshield", "spikyshield", "obstruct",
+    "banefulbunker", "burningbulwark", "silktrap", "maxguard",
+    "taunt", "encore", "torment", "disable",
+    "lightscreen", "reflect", "auroraveil",
+    "trick", "switcheroo",
+    "trickroom", "tailwind",
+    "defog", "rapidspin", "courtchange",
+    "haze", "clearsmog",
+    "leechseed", "substitute",
+})
+
+
+def _is_status_move(move_id: str) -> bool:
+    """True if move_id is a known status-category move.
+
+    Phase 1: hardcoded set above. Returns False for unknown moves to
+    avoid false positives (better to miss an AV inference than to
+    incorrectly rule out AV when the move is actually damaging).
+    """
+    return _normalize(move_id) in _STATUS_MOVES
+
+
 @dataclass
 class OpponentBelief:
     """Per-opp-Pokemon belief state. Mutated turn by turn.
@@ -185,6 +224,30 @@ class BeliefTracker:
         b.revealed_moves.add(norm_move)
         b.last_used_move = norm_move
         b.moves_used_since_switch_in.append(norm_move)
+
+    def on_move(
+        self, species: str, move_id: str, split_msg: list[str]
+    ) -> None:
+        """Called on every |move| protocol event. The `[from]`-token guard
+        suppresses R1/R2/R3 on passive-source moves (Sleep Talk, Dancer,
+        Future Sight impact, etc.). Locked Move (Outrage) is NOT passive
+        and DOES fire the rules normally.
+
+        Tasks 6 + 7 will extend this method with R3 + R1 logic. R2 (this
+        task): if the opp uses a status-category move, Assault Vest is
+        ruled out (AV blocks status moves entirely).
+        """
+        if is_passive_move_event(split_msg):
+            return  # Passive — don't update revealed_moves or fire rules
+        # Pass through to skeleton state recording (revealed_moves, last_used)
+        self.on_reveal_move(species, move_id)
+        # R2: Assault Vest blocks status moves; if a status move was used,
+        # AV is ruled out.
+        b = self.get(species)
+        norm_move = _normalize(move_id)
+        if _is_status_move(norm_move):
+            b.impossible_items.add("assaultvest")
+            b.used_status_move = True
 
     def on_reveal_item(self, species: str, item_id: str) -> None:
         """Record opp's item identity (PROTOCOL-asserted, not inferred).
