@@ -176,3 +176,20 @@ def test_on_reveal_ability_ignores_empty_string():
     t = BeliefTracker()
     t.on_reveal_ability("Garchomp", "")
     assert t.get("Garchomp").revealed_ability is None
+
+
+def test_clear_drops_all_beliefs_in_place():
+    """REGRESSION (Task 3 review): clear() must reset state WITHOUT
+    replacing the tracker instance. SpectatorAdapter.on_team_preview
+    relies on this so external callers (Task 9 harness) holding a
+    reference to the tracker stay connected across battle resets."""
+    t = BeliefTracker()
+    t.on_reveal_move("Garchomp", "Earthquake")
+    t.on_reveal_item("Garchomp", "Choice Band")
+    assert "earthquake" in t.get("Garchomp").revealed_moves
+
+    t.clear()
+
+    # All belief state is gone — fresh OpponentBelief is built lazily
+    assert t.get("Garchomp").revealed_moves == set()
+    assert t.get("Garchomp").revealed_item is None

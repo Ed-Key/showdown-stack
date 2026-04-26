@@ -53,7 +53,10 @@ class SpectatorAdapter:
         self._opp_specs.clear()
         self._opp_display_names.clear()
         # Reset belief tracker — fresh battle, no prior observations.
-        self._belief = BeliefTracker()
+        # Clear in place rather than replacing the instance, so that any
+        # external code holding a reference (e.g., the harness's live
+        # message hook in Task 9) stays connected to the same tracker.
+        self._belief.clear()
         for species in opponent_species:
             norm = _normalize(species)
             self._opp_display_names[norm] = species

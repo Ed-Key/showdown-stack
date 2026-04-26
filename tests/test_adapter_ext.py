@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from showdown_copilot.adapter_ext import SpectatorAdapter
+from showdown_copilot.belief import BeliefTracker
 from showdown_copilot.models import ModalSet
 from showdown_copilot.priors import PriorsSource
 
@@ -358,6 +359,35 @@ def test_on_team_preview_resets_belief_tracker():
     # New battle starts — preview must reset belief.
     sa.on_team_preview(["Garchomp"])
     assert "earthquake" not in sa._belief.get("Garchomp").revealed_moves
+
+
+def test_on_team_preview_preserves_external_tracker_identity():
+    """REGRESSION (Task 3 review): if a caller passes an external
+    BeliefTracker (e.g., the harness in Task 9 holds a reference for its
+    own pipeline state), on_team_preview must CLEAR it in place rather
+    than REPLACING it. Otherwise the caller's reference is silently
+    detached from the adapter's belief state.
+    """
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    external_tracker = BeliefTracker()
+    external_tracker.on_reveal_move("Garchomp", "Earthquake")  # pre-seeded
+    sa = SpectatorAdapter(
+        OWN_PASTE, "gen9monotype", "Ground", priors,
+        belief_tracker=external_tracker,
+    )
+    assert sa._belief is external_tracker
+
+    # Preview clears the tracker in place — but identity must be preserved.
+    sa.on_team_preview(["Garchomp"])
+    assert sa._belief is external_tracker, (
+        "on_team_preview must clear in place, not replace the instance"
+    )
+
+    # And the clear actually happened.
+    assert "earthquake" not in external_tracker.get("Garchomp").revealed_moves
+    # Subsequent reveals through the adapter reach the external tracker.
+    sa.on_reveal("Garchomp", revealed_move="Stone Edge")
+    assert "stoneedge" in external_tracker.get("Garchomp").revealed_moves
 
 
 def test_to_engine_json_passes_belief_to_get_set():

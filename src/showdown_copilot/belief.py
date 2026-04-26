@@ -128,6 +128,16 @@ class BeliefTracker:
             self._beliefs[norm] = OpponentBelief(species=norm)
         return self._beliefs[norm]
 
+    def clear(self) -> None:
+        """Drop all per-Pokemon belief entries — but preserve the tracker
+        instance itself. Used by SpectatorAdapter.on_team_preview at the
+        start of each new battle. Replacing `self._beliefs` (rather than
+        the tracker as a whole) keeps any external references alive — the
+        harness / live message hook can hold a reference to the tracker
+        across battles without losing the connection.
+        """
+        self._beliefs = {}
+
     # --- State-recording API (called by the live message hook) ---
 
     def on_reveal_move(self, species: str, move_id: str) -> None:
