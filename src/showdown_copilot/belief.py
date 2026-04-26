@@ -179,6 +179,39 @@ _ABILITY_TO_WEATHER: dict[str, str] = {
 }
 
 
+# Species whose Phase-1 ability pool includes Sheer Force or Magic Guard.
+# If opp's species is in this set, R3 does NOT fire (Life Orb stays
+# possible). Reasoning: Sheer Force suppresses LO recoil entirely on
+# secondary-effect moves; Magic Guard is immune to all indirect damage
+# (including LO recoil). For species that could have either ability, we
+# can't conclude "not LO" merely from absence-of-recoil on a single
+# damaging move.
+#
+# Phase 2 should derive this set programmatically from chaos data — see
+# Task 8 (R4) for the same data-driven approach to Levitate / Magic
+# Guard. Use normalized species ids (lowercase alphanumeric) — they're
+# compared against `_normalize(species)`.
+_SHEERFORCE_OR_MAGICGUARD_SPECIES: frozenset[str] = frozenset({
+    # Sheer Force candidates (gen9 NatDex pool). Normalized species ids
+    # match what `_normalize(showdown_species_name)` produces — for
+    # Paldean Tauros forms that's "taurospaldea{combat,blaze,aqua}"
+    # (Showdown form names are Combat / Blaze / Aqua, not Fire / Water).
+    "tauros",
+    "taurospaldeacombat", "taurospaldeablaze", "taurospaldeaaqua",
+    "darmanitan", "darmanitangalar", "darmanitangalarzen",
+    "feraligatr", "krookodile", "mienshao",
+    "nidoking", "nidoqueen",
+    "ursaring", "rampardos", "bouffalant",
+    "irontreads",
+    # Magic Guard candidates
+    "sigilyph", "alakazam", "alakazammega",
+    "clefable", "clefairy", "cleffa",
+    "reuniclus", "duosion", "solosis",
+    "spinda",
+    # Not exhaustive — Phase 2 should derive from chaos data
+})
+
+
 # ---------- BeliefTracker ----------
 
 
@@ -245,15 +278,19 @@ class BeliefTracker:
         so the `[from]` guard runs. `on_reveal_move` is an internal state
         recorder used by `on_move` and the harness fallback path.
 
-        Tasks 6 + 7 will extend this method with R3 + R1 logic. R2 (this
-        task): if the opp uses a status-category move, Assault Vest is
-        ruled out (AV blocks status moves entirely).
+        Task 7 will extend this method with R1 logic. R2 (Task 5): if the
+        opp uses a status-category move, Assault Vest is ruled out (AV
+        blocks status moves entirely). R3 (this task): if the opp uses
+        any damaging move and the species is NOT in the SF/MG ability
+        pool, Life Orb is ruled out — LO recoil announces itself in the
+        protocol, so absence of recoil on a damaging move from a
+        non-SF/MG candidate is free evidence that LO is impossible.
 
-        ORDER NOTE for Tasks 6+7: R1 (two-different-moves Choice disproof)
+        ORDER NOTE for Task 7: R1 (two-different-moves Choice disproof)
         must fire BEFORE the `on_reveal_move` call — R1 needs to compare
         the new move against the PREVIOUS `last_used_move`, which
-        `on_reveal_move` overwrites. R3 (damaging-move LO elimination)
-        fires AFTER state recording, alongside R2. Final order:
+        `on_reveal_move` overwrites. R3 fires AFTER state recording,
+        alongside R2. Final order:
             [from] guard → R1 → on_reveal_move → R2 → R3
         """
         # Defensive: callers should pass a list, but Task 9 harness wiring
@@ -265,13 +302,25 @@ class BeliefTracker:
             return  # Passive — don't update revealed_moves or fire rules
         # Pass through to skeleton state recording (revealed_moves, last_used)
         self.on_reveal_move(species, move_id)
-        # R2: Assault Vest blocks status moves; if a status move was used,
-        # AV is ruled out.
         b = self.get(species)
         norm_move = _normalize(move_id)
+        norm_species = _normalize(species)
+
+        # R2: Assault Vest blocks status moves; if a status move was used,
+        # AV is ruled out. Status moves don't trigger R3 (LO doesn't
+        # recoil on status moves anyway, so firing R3 on a status move
+        # would be a category error) — early return after R2.
         if _is_status_move(norm_move):
             b.impossible_items.add("assaultvest")
             b.used_status_move = True
+            return
+
+        # R3 (Task 6): damaging move → LO ruled out except for SF/MG
+        # candidates. Sheer Force suppresses LO recoil; Magic Guard is
+        # immune to indirect damage. If the species could have either
+        # ability, absence of recoil isn't evidence — leave LO possible.
+        if norm_species not in _SHEERFORCE_OR_MAGICGUARD_SPECIES:
+            b.impossible_items.add("lifeorb")
 
     def on_reveal_item(self, species: str, item_id: str) -> None:
         """Record opp's item identity (PROTOCOL-asserted, not inferred).

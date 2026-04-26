@@ -355,3 +355,60 @@ def test_R2_handles_None_split_msg_defensively():
     b = t.get("Toxapex")
     # R2 fires normally — None treated as active move
     assert "assaultvest" in b.impossible_items
+
+
+# ---------- R3 (Task 6): damaging move rules out Life Orb (except SF/MG) ----
+
+
+def test_R3_damaging_move_eliminates_lifeorb_normal_case():
+    """Garchomp uses Earthquake — fires inline. Garchomp's ability pool
+    is Rough Skin / Sand Veil; no SF or MG. LO ruled out."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move(
+        "Garchomp", "Earthquake",
+        split_msg=["|move|", "p2a: Garchomp", "Earthquake"],
+    )
+    b = t.get("Garchomp")
+    assert "lifeorb" in b.impossible_items
+
+
+def test_R3_lifeorb_keepable_for_sheerforce_candidate():
+    """Tauros-Paldea-Aqua has Sheer Force as one of its abilities — LO
+    can be on Tauros without us seeing recoil. R3 must NOT fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Tauros-Paldea-Aqua")
+    t.on_move(
+        "Tauros-Paldea-Aqua", "Aqua Jet",
+        split_msg=["|move|", "p2a: Tauros-Paldea-Aqua", "Aqua Jet"],
+    )
+    b = t.get("Tauros-Paldea-Aqua")
+    assert "lifeorb" not in b.impossible_items
+
+
+def test_R3_lifeorb_keepable_for_magicguard_candidate():
+    """Sigilyph has Magic Guard — immune to LO recoil. R3 doesn't fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Sigilyph")
+    t.on_move(
+        "Sigilyph", "Air Slash",
+        split_msg=["|move|", "p2a: Sigilyph", "Air Slash"],
+    )
+    b = t.get("Sigilyph")
+    assert "lifeorb" not in b.impossible_items
+
+
+def test_R3_does_not_fire_on_status_move():
+    """R3 only fires on damaging moves; a status move triggers R2 but
+    must NOT also trigger R3 (LO doesn't recoil on status moves anyway)."""
+    t = BeliefTracker()
+    t.on_switch_in("Toxapex")
+    t.on_move(
+        "Toxapex", "Recover",
+        split_msg=["|move|", "p2a: Toxapex", "Recover"],
+    )
+    b = t.get("Toxapex")
+    # R2 fires
+    assert "assaultvest" in b.impossible_items
+    # R3 doesn't fire on status moves
+    assert "lifeorb" not in b.impossible_items
