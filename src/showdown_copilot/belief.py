@@ -260,21 +260,33 @@ _CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = _STATUS_MOVES - frozenset({
 
 # ---------- R4 (Task 8): Heavy-Duty Boots from hazard immunity ----------
 
-# Smogon Pokedex base-types lookup (Phase 1 simplified to species
-# relevant for hazard-immunity testing; Phase 2 should plug in
-# poke-env's full pokedex for completeness across the entire dex).
-# Used by R4's Tera-aware type carve-outs via has_type().
-_BASE_TYPES: dict[str, tuple[str, ...]] = {
-    "garchomp": ("Dragon", "Ground"),
-    "skarmory": ("Steel", "Flying"),
-    "rotomwash": ("Electric", "Water"),
-    "sigilyph": ("Psychic", "Flying"),
-    "ferrothorn": ("Grass", "Steel"),
-    "toxapex": ("Poison", "Water"),
-    "landorustherian": ("Ground", "Flying"),
-    "corviknight": ("Flying", "Steel"),
-    # Add as Phase-1 tests demand
-}
+# Base-types lookup. Sourced from poke-env's authoritative gen-9 pokedex
+# at module load time so R4's Tera-aware type carve-outs work for ANY
+# species — not just an 8-entry hand-curated subset.
+#
+# Without this, R4 over-fires HDB on common base-Flying types not in the
+# old hand-curated dict (Charizard, Talonflame, Gholdengo, Salamence,
+# Dragonite, Yveltal, etc.) — `has_type(b, "Flying", ())` returns False
+# for unlisted species, so the Tera-Flying carve-out is silently skipped
+# and the Pokemon falsely gets HDB inferred when Spikes is active.
+#
+# Same poke-env-as-ground-truth pattern as scripts/extract_ability_pools.py.
+def _build_base_types_table() -> dict[str, tuple[str, ...]]:
+    """Build {normalized_species → (Type1, Type2)} from poke-env's gen-9
+    pokedex. Called once at module load.
+    """
+    from poke_env.data import GenData
+
+    pokedex = GenData.from_gen(9).pokedex
+    out: dict[str, tuple[str, ...]] = {}
+    for species_id, entry in pokedex.items():
+        types = entry.get("types") or []
+        if types:
+            out[species_id] = tuple(types)
+    return out
+
+
+_BASE_TYPES: dict[str, tuple[str, ...]] = _build_base_types_table()
 
 # Items ruled out when R4 fires (= every other plausible item becomes
 # impossible because only HDB explains the absence of hazard damage in
@@ -426,22 +438,39 @@ class BeliefTracker:
     def on_reveal_item(self, species: str, item_id: str) -> None:
         """Record opp's item identity (PROTOCOL-asserted, not inferred).
         Empty / whitespace-only `item_id` is ignored.
+
+        Discards the revealed item from `impossible_items` — a positive
+        protocol-asserted reveal SUPERSEDES any prior false impossibility
+        (e.g., R4 / Task 8's eager `airballoon` rule-out on every
+        switch-in must be rolled back when Air Balloon actually
+        announces). Without this discard, the priors filter at
+        `priors.py:get_set` would reject every candidate set because
+        the revealed item is in impossible_items AND the equality check
+        for revealed_item would fail on every other candidate — empty
+        filter → fallback to unfiltered modal.
         """
         norm_item = _normalize(item_id)
         if not norm_item:
             return
         b = self.get(species)
         b.revealed_item = norm_item
+        b.impossible_items.discard(norm_item)
 
     def on_reveal_ability(self, species: str, ability_id: str) -> None:
         """Record opp's ability identity. Empty / whitespace-only
         `ability_id` is ignored.
+
+        Discards the revealed ability from `impossible_abilities` — a
+        positive reveal supersedes any prior false impossibility from
+        R5's eager rule-out on switch-in. Same priors-filter rationale
+        as on_reveal_item.
         """
         norm_ability = _normalize(ability_id)
         if not norm_ability:
             return
         b = self.get(species)
         b.revealed_ability = norm_ability
+        b.impossible_abilities.discard(norm_ability)
 
     def on_item_swapped(
         self, species: str, new_item: str | None, old_item: str | None
@@ -452,10 +481,16 @@ class BeliefTracker:
         evidence about their item. Without this hook, R1 mis-fires
         after a Trick (the opp gets a new item; the next move looks
         like 'two different moves used' to a naive R1).
+
+        Discards the new item from `impossible_items` (positive reveal
+        supersedes; same rationale as on_reveal_item).
         """
         b = self.get(species)
         b.removed_item = old_item
-        b.revealed_item = _normalize(new_item) if new_item else None
+        norm_new = _normalize(new_item) if new_item else None
+        b.revealed_item = norm_new
+        if norm_new:
+            b.impossible_items.discard(norm_new)
         b.last_used_move = None
         b.moves_used_since_switch_in = []
 

@@ -361,18 +361,28 @@ def test_get_set_revealed_ability_overrides_R5_impossible_abilities(tmp_path):
     assert "intimidate" in belief_after_r5.impossible_abilities
 
     # Now the protocol fires `-ability: Intimidate` — Intimidate WAS in
-    # fact present despite R5's eager rule-out. revealed_ability is set.
+    # fact present despite R5's eager rule-out. on_reveal_ability sets
+    # revealed_ability AND discards intimidate from impossible_abilities
+    # (Plan H Task 8 review fix: positive reveal supersedes the eager
+    # rule-out — the priors filter is a conjunction, not an override).
     tracker.on_reveal_ability("Landorus-Therian", "Intimidate")
     belief = tracker.get("Landorus-Therian")
     assert belief.revealed_ability == "intimidate"
-    assert "intimidate" in belief.impossible_abilities  # R5 entry persists
+    assert "intimidate" not in belief.impossible_abilities, (
+        "on_reveal_ability must discard the revealed ability from "
+        "impossible_abilities — keeping it would cause priors filter to "
+        "exclude every candidate (revealed_ability check + impossible "
+        "check are AND-ed)"
+    )
 
-    # The priors filter consults revealed_ability FIRST. Despite intimidate
-    # being in impossible_abilities, the modal must select intimidate
-    # (because it's the asserted truth).
+    # The priors filter selects chaos sets matching revealed_ability.
+    # With intimidate in impossible_abilities AND revealed_ability ==
+    # intimidate, the filter would have been empty (silent fallback to
+    # unfiltered modal). With the discard fix, the filter correctly
+    # picks intimidate.
     out = src.get_set("Landorus-Therian", format="gen9ou", belief=belief)
     assert out.ability == "intimidate", (
-        "priors filter must prefer revealed_ability over impossible_abilities — "
-        "without this, R5's eager rule-out would harm modal selection on every "
-        "Pokemon whose ability gets revealed"
+        "priors filter must select revealed_ability — without the "
+        "discard fix, R5's eager rule-out would harm modal selection "
+        "on every Pokemon whose ability gets revealed"
     )

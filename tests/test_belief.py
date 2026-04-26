@@ -245,20 +245,27 @@ def test_R5_carve_out_c_neutralizing_gas_skips_entire_pass():
 
 def test_R5_revealed_ability_overrides_false_impossibility():
     """If the protocol later reveals Intimidate (e.g. it DID fire and
-    we see the -ability event), revealed_ability is set positively;
-    R5's earlier impossible_abilities entry is no longer load-bearing
-    because revealed_ability is the source of truth.
+    we see the -ability event), revealed_ability is set positively
+    AND the false-impossibility entry is discarded from
+    impossible_abilities. This is required for the priors filter at
+    priors.py:get_set, which uses a CONJUNCTION of impossible-check AND
+    revealed-equality; without the discard, the revealed ability would
+    fail the impossible-check and produce an empty filter (silent
+    fallback to unfiltered modal).
 
-    This test documents the design contract; the priors filter
-    consults revealed_ability first, then impossible_abilities."""
+    REGRESSION (Plan H Task 8 review): originally documented as
+    'impossible_abilities still contains the entry; filter prefers
+    revealed_ability' — but the filter is a conjunction, not an
+    override, so the original contract was broken. on_reveal_ability
+    now discards from impossible_abilities to keep state consistent."""
     t = BeliefTracker()
     t.on_switch_in("Landorus-Therian")  # ruled out
+    assert "intimidate" in t.get("Landorus-Therian").impossible_abilities
     t.on_reveal_ability("Landorus-Therian", "Intimidate")  # actually has it
     b = t.get("Landorus-Therian")
     assert b.revealed_ability == "intimidate"
-    # impossible_abilities still contains the entry — this is fine; the
-    # priors filter prefers revealed_ability when set.
-    assert "intimidate" in b.impossible_abilities
+    # The discarded entry: positive reveal supersedes the eager rule-out.
+    assert "intimidate" not in b.impossible_abilities
 
 
 # ---------- R2 (Task 5): status-move usage rules out Assault Vest ----------
@@ -732,6 +739,36 @@ def test_R4_tera_flying_carve_out_for_spikes():
     t.on_turn_boundary()
     b = t.get("Garchomp")
     assert "leftovers" not in b.impossible_items
+
+
+def test_R4_base_flying_carve_out_for_spikes_via_poke_env_pokedex():
+    """REGRESSION (Plan H Task 8 review): _BASE_TYPES is now derived
+    from poke-env's gen-9 pokedex at module load, not a hand-curated
+    8-entry dict. So R4 must correctly carve out base-Flying species
+    (Charizard, Talonflame, Yveltal, etc.) on Spikes — not just
+    Skarmory/Corviknight from the old dict.
+
+    The original _BASE_TYPES dict only had 8 species; Charizard/Talonflame/
+    etc. defaulted to () → has_type(b, 'Flying', ()) returned False →
+    Tera-Flying carve-out skipped → R4 over-fired HDB on every
+    base-Flying Pokemon NOT in the dict.
+    """
+    t = BeliefTracker()
+    # Charizard is base Fire/Flying — Spikes don't hit Flying.
+    t.on_switch_in("Charizard", side_hazards={"spikes": 1})
+    t.on_turn_boundary()
+    b = t.get("Charizard")
+    # Tera-Flying carve-out fires (via base-type lookup, no Tera needed).
+    # R4 should NOT fire — leftovers stays possible.
+    assert "leftovers" not in b.impossible_items, (
+        "Charizard is base Flying-type per poke-env pokedex — Spikes "
+        "don't damage Flying types. R4 must not over-fire HDB."
+    )
+
+    # Same for Talonflame (base Fire/Flying, also not in old _BASE_TYPES)
+    t.on_switch_in("Talonflame", side_hazards={"spikes": 1})
+    t.on_turn_boundary()
+    assert "leftovers" not in t.get("Talonflame").impossible_items
 
 
 def test_R4_no_fire_without_active_hazards():
