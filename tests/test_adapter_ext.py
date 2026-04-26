@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from battle_testing.team_parser import PokemonSpec
+
 from showdown_copilot.adapter_ext import SpectatorAdapter
 from showdown_copilot.belief import BeliefTracker
 from showdown_copilot.models import ModalSet
@@ -517,3 +519,143 @@ def test_to_engine_format_passes_belief_to_get_set():
     assert priors.last_belief is not None
     assert priors.last_belief.species == "garchomp"
     assert "earthquake" in priors.last_belief.revealed_moves
+
+
+# ---------- Plan H Task 11 fix: known_opp_specs (real-team injection) ----------
+
+
+def _real_spec(species, **overrides):
+    """Build a PokemonSpec with realistic-shape values for tests."""
+    base = dict(
+        species=species,
+        item="leftovers",
+        ability="sturdy",
+        nature="Adamant",
+        level=100,
+        evs={"hp": 252, "atk": 252, "def": 0, "spa": 0, "spd": 4, "spe": 0},
+        ivs={k: 31 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+        moves=["bodypress", "irondefense", "rapidspin", "spikes"],
+        stats={"hp": 354, "atk": 200, "def": 300, "spa": 90, "spd": 130, "spe": 80},
+        types=["Bug", "Steel"],
+        weight_kg=125.8,
+        tera_type="Steel",
+    )
+    base.update(overrides)
+    return PokemonSpec(**base)
+
+
+def test_known_opp_specs_used_when_provided():
+    """When known_opp_specs is passed, _opp_specs is populated from those
+    specs after on_team_preview — no chaos lookup."""
+    priors = StubPriors({})  # empty — must NOT be consulted
+    forretress = _real_spec("forretress")
+    lopunny = _real_spec(
+        "lopunnymega",
+        item="lopunnite",
+        types=["Normal", "Fighting"],
+        weight_kg=33.0,
+    )
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9nationaldexag",
+        team_type=None, priors=priors,
+        known_opp_specs=[forretress, lopunny],
+    )
+    sa.on_team_preview(["Forretress", "Lopunny-Mega"])
+    assert "forretress" in sa._opp_specs
+    assert "lopunnymega" in sa._opp_specs
+    assert sa._opp_specs["forretress"] is forretress
+    assert sa._opp_specs["lopunnymega"] is lopunny
+
+
+def test_known_opp_specs_preserves_real_stats():
+    """Known spec has HP=354, weight=125.8 — these must survive into
+    to_engine_format output (not be replaced with HP=100, weight=0)."""
+    from showdown_copilot.adapter_ext import SpectatorAdapter
+
+    priors = StubPriors({})
+    forretress = _real_spec("forretress")  # HP=354, weight=125.8
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9nationaldexag",
+        team_type=None, priors=priors,
+        known_opp_specs=[forretress],
+    )
+    sa.on_team_preview(["Forretress"])
+
+    fake_battle = _make_fake_battle()
+    out = sa.to_engine_format(fake_battle)
+
+    # The opp side is sideTwo. Find the forretress entry.
+    forr_pkm = None
+    for p in out["sideTwo"]["pokemon"]:
+        if p["species"] == "forretress":
+            forr_pkm = p
+            break
+    assert forr_pkm is not None, "forretress missing from sideTwo"
+    assert forr_pkm["maxhp"] == 354, f"expected HP=354, got {forr_pkm['maxhp']}"
+    assert forr_pkm["weightKg"] == 125.8, f"expected weight=125.8, got {forr_pkm['weightKg']}"
+    assert "Bug" in forr_pkm["types"], f"expected Bug type, got {forr_pkm['types']}"
+    assert "Steel" in forr_pkm["types"], f"expected Steel type, got {forr_pkm['types']}"
+
+
+def test_known_opp_specs_belief_overlays_revealed_item():
+    """Known spec has item='leftovers', reveal 'Rocky Helmet' via on_reveal —
+    engine output must contain 'rockyhelmet' not 'leftovers'."""
+    priors = StubPriors({})
+    forretress = _real_spec("forretress", item="leftovers")
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9nationaldexag",
+        team_type=None, priors=priors,
+        known_opp_specs=[forretress],
+    )
+    sa.on_team_preview(["Forretress"])
+    sa.on_reveal("forretress", revealed_item="Rocky Helmet")
+
+    fake_battle = _make_fake_battle()
+    out = sa.to_engine_format(fake_battle)
+
+    forr_pkm = None
+    for p in out["sideTwo"]["pokemon"]:
+        if p["species"] == "forretress":
+            forr_pkm = p
+            break
+    assert forr_pkm is not None
+    assert forr_pkm["item"] == "rockyhelmet", (
+        f"expected item=rockyhelmet (overlaid from belief), got {forr_pkm['item']}"
+    )
+
+
+def test_known_opp_specs_skips_priors_lookup_in_team_preview():
+    """When known_opp_specs is set, on_team_preview must NOT call
+    priors.get_set — that's the artifact we're fixing."""
+    class TrackingPriors(StubPriors):
+        def __init__(self):
+            super().__init__({})
+            self.get_set_calls = 0
+        def get_set(self, species, format, team_type=None, belief=None):
+            self.get_set_calls += 1
+            # Don't have a real modal to return — would raise KeyError.
+            raise AssertionError("get_set should not be called in known-specs path")
+
+    priors = TrackingPriors()
+    forretress = _real_spec("forretress")
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9nationaldexag",
+        team_type=None, priors=priors,
+        known_opp_specs=[forretress],
+    )
+    # Must complete without raising.
+    sa.on_team_preview(["Forretress"])
+    assert priors.get_set_calls == 0
+
+
+def test_known_opp_specs_none_falls_back_to_chaos_path():
+    """known_opp_specs=None (default) — existing behavior unchanged."""
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(
+        own_paste=OWN_PASTE, format="gen9monotype",
+        team_type="Ground", priors=priors,
+        # known_opp_specs not passed
+    )
+    sa.on_team_preview(["Garchomp"])
+    # Chaos path WAS taken — _opp_specs still populated.
+    assert "garchomp" in sa._opp_specs

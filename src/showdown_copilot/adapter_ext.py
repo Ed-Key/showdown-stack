@@ -32,7 +32,16 @@ class SpectatorAdapter:
         pimc_k: int = 4,
         pimc_seed: int | None = None,
         belief_tracker: BeliefTracker | None = None,
+        known_opp_specs: list[PokemonSpec] | None = None,
     ):
+        """SpectatorAdapter — composes over BattleAdapter.
+
+        When `known_opp_specs` is provided (harness path with team paste), the
+        engine sees these real specs as the opp foundation; belief tracking
+        only overlays moves/item/ability. When None (live extension / TUI
+        without team paste), falls back to chaos-modal foundation per
+        `priors.get_set`.
+        """
         self._own_team: list[PokemonSpec] = parse_team_file(own_paste)
         self._format = format
         self._team_type = team_type
@@ -47,6 +56,13 @@ class SpectatorAdapter:
         # NEW (Plan H Task 3): belief tracker (defaults to a fresh one).
         # Replaces the freestanding _revealed dict from Plan G' Task 4.
         self._belief = belief_tracker if belief_tracker is not None else BeliefTracker()
+        # NEW (Plan H Task 11 fix): real opp specs from harness team paste.
+        # When set, on_team_preview / _build_belief_aware_battle_adapter use
+        # these directly instead of synthesizing modal sets from chaos. This
+        # eliminates the placeholder-stats / empty-types / weight=0 artifact
+        # introduced when the harness routed through SpectatorAdapter without
+        # a way to inject the real team.
+        self._known_opp_specs: list[PokemonSpec] | None = known_opp_specs
 
     def on_team_preview(self, opponent_species: list[str]) -> None:
         """Called with the 6 species names revealed at team preview."""
@@ -57,6 +73,28 @@ class SpectatorAdapter:
         # external code holding a reference (e.g., the harness's live
         # message hook in Task 9) stays connected to the same tracker.
         self._belief.clear()
+
+        # NEW (Plan H Task 11 fix): if known_opp_specs was injected by the
+        # harness, populate _opp_specs directly from the REAL team specs.
+        # Skip the chaos modal lookup entirely — those are placeholders that
+        # discard real stats / types / weight / item.
+        if self._known_opp_specs is not None:
+            for spec in self._known_opp_specs:
+                norm = _normalize(spec.species)
+                # Display name fallback: spec.species is normalized id form
+                # (e.g. "lopunnymega"). For chaos lookups in the non-harness
+                # path we want display casing; here we just preserve what
+                # we have so downstream code that consults display names
+                # still works.
+                self._opp_display_names[norm] = spec.species
+                self._opp_specs[norm] = spec
+            logger.info(
+                "team preview: loaded %d KNOWN opponent specs from harness "
+                "(format=%s, team_type=%s)",
+                len(self._opp_specs), self._format, self._team_type,
+            )
+            return
+
         for species in opponent_species:
             norm = _normalize(species)
             self._opp_display_names[norm] = species
@@ -135,11 +173,49 @@ class SpectatorAdapter:
         modal set for each opp species. Shared by `to_engine_format` and the
         non-PIMC branch of `to_engine_json`.
 
-        The modal lookup passes `belief=self._belief.get(norm_species)` so
-        the priors filter (Plan H Task 2) consults revealed_moves /
-        impossible_items / impossible_abilities. Falls back to the species
-        modal if the belief filter eliminates every candidate.
+        Two paths:
+        1. Known-specs path (Plan H Task 11 fix): when `self._known_opp_specs`
+           is set (harness with real team paste), the BattleAdapter is built
+           from the REAL specs. Belief overlays only revealed item / ability /
+           moves on top. No chaos lookup. This is the path that fixes the
+           Plan H Task 11 measurement artifact (HP=100 placeholder, weight=0,
+           dropped Lopunnite, etc.).
+        2. Chaos-modal path (live extension / TUI): the modal lookup passes
+           `belief=self._belief.get(norm_species)` so the priors filter
+           (Plan H Task 2) consults revealed_moves / impossible_items /
+           impossible_abilities. Falls back to the species modal if the belief
+           filter eliminates every candidate.
         """
+        if self._known_opp_specs is not None:
+            # Build from real specs, overlaying revealed info from belief.
+            # Mutating the originals would persist across battles, so we make
+            # shallow copies via dataclasses.replace.
+            from dataclasses import replace
+            opp_specs_overlaid: list[PokemonSpec] = []
+            for spec in self._known_opp_specs:
+                norm = _normalize(spec.species)
+                belief = self._belief.get(spec.species)
+                new_item = spec.item
+                new_ability = spec.ability
+                new_moves = list(spec.moves)
+                if belief.revealed_item:
+                    new_item = _normalize(belief.revealed_item)
+                if belief.revealed_ability:
+                    new_ability = _normalize(belief.revealed_ability)
+                # Note: revealed_moves are usually a subset of the real moves,
+                # so we don't need to overlay — the real spec already has the
+                # truth. Skip move overlay for known-specs path.
+                opp_specs_overlaid.append(replace(
+                    spec,
+                    item=new_item,
+                    ability=new_ability,
+                    moves=new_moves,
+                ))
+            return BattleAdapter(
+                own_team=self._own_team,
+                opponent_team=opp_specs_overlaid,
+            )
+
         opp_specs_with_belief: dict[str, PokemonSpec] = {}
         for norm_species, current_spec in self._opp_specs.items():
             display_name = self._opp_display_names.get(
