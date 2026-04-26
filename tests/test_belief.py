@@ -310,3 +310,48 @@ def test_R2_sleep_talk_does_not_fire():
     assert b.used_status_move is False
     # Passive move → revealed_moves not updated
     assert "soak" not in b.revealed_moves
+
+
+def test_R2_teleport_fires():
+    """REGRESSION (Task 5 review): Teleport is status-category in gen 8+
+    (it pivots like U-turn but is non-damaging). AV holders CANNOT use
+    Teleport — so opp using Teleport IS evidence AV is impossible.
+    Common archetype: Slowbro / Blissey / Slowking-G defensive pivots."""
+    t = BeliefTracker()
+    t.on_switch_in("Slowbro")
+    t.on_move(
+        "Slowbro", "Teleport",
+        split_msg=["|move|", "p2a: Slowbro", "Teleport"],
+    )
+    b = t.get("Slowbro")
+    assert "assaultvest" in b.impossible_items
+    assert b.used_status_move is True
+
+
+def test_R2_parting_shot_fires():
+    """REGRESSION (Task 5 review): Parting Shot is status-category in gen 6+
+    (debuffs target Atk/SpA and pivots). AV holders CANNOT use Parting Shot.
+    Common archetype: Pangoro / Whimsicott defensive pivots."""
+    t = BeliefTracker()
+    t.on_switch_in("Pangoro")
+    t.on_move(
+        "Pangoro", "Parting Shot",
+        split_msg=["|move|", "p2a: Pangoro", "Parting Shot"],
+    )
+    b = t.get("Pangoro")
+    assert "assaultvest" in b.impossible_items
+    assert b.used_status_move is True
+
+
+def test_R2_handles_None_split_msg_defensively():
+    """REGRESSION (Task 5 review): the live message hook in Task 9 may pass
+    None for split_msg if a malformed protocol line couldn't be parsed.
+    on_move must not crash — None is treated as 'no [from] tokens' (active
+    move), so R2 fires normally."""
+    t = BeliefTracker()
+    t.on_switch_in("Toxapex")
+    # No exception
+    t.on_move("Toxapex", "Recover", split_msg=None)
+    b = t.get("Toxapex")
+    # R2 fires normally — None treated as active move
+    assert "assaultvest" in b.impossible_items

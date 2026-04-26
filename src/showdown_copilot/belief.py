@@ -24,10 +24,16 @@ def _normalize(name: str) -> str:
 # competitive ladder. Phase 2 should replace this with a lookup against
 # poke-env's Move.category or a generated complete list.
 #
-# NOTE: Knock Off, U-turn, Volt Switch, Flip Turn, Parting Shot, and
-# Teleport are EXCLUDED — they are damaging (or in Teleport's case,
-# gen8+ pivoting) moves and AV holders CAN use them. Including them
-# would mis-fire R2 and incorrectly rule out AV.
+# EXCLUDED (these are damaging-category in gen 5+ — AV holders CAN use them):
+# - Knock Off (Dark physical)
+# - U-turn / Volt Switch / Flip Turn (physical/special pivoting)
+# Including these would mis-fire R2 and incorrectly rule out AV.
+#
+# INCLUDED (status-category pivoting/utility — AV holders CANNOT use them):
+# - Teleport (status in gen 8+, gen 8+ pivots; before gen 8 was useless but
+#   still status). Used by AV-eligible defensive pivots like Slowbro/Blissey.
+# - Parting Shot (status in gen 6+, debuffs target Atk/SpA and pivots).
+#   Used by AV-eligible defensive pivots like Pangoro/Whimsicott.
 _STATUS_MOVES: frozenset[str] = frozenset({
     "stealthrock", "spikes", "toxicspikes", "stickyweb",
     "willowisp", "toxic", "thunderwave", "glare", "sleeppowder",
@@ -45,6 +51,7 @@ _STATUS_MOVES: frozenset[str] = frozenset({
     "defog", "rapidspin", "courtchange",
     "haze", "clearsmog",
     "leechseed", "substitute",
+    "teleport", "partingshot",  # status-category pivoting moves
 })
 
 
@@ -226,17 +233,34 @@ class BeliefTracker:
         b.moves_used_since_switch_in.append(norm_move)
 
     def on_move(
-        self, species: str, move_id: str, split_msg: list[str]
+        self, species: str, move_id: str, split_msg: list[str] | None
     ) -> None:
         """Called on every |move| protocol event. The `[from]`-token guard
         suppresses R1/R2/R3 on passive-source moves (Sleep Talk, Dancer,
         Future Sight impact, etc.). Locked Move (Outrage) is NOT passive
         and DOES fire the rules normally.
 
+        This is the protocol-level entry point — callers from the live
+        message hook should call `on_move`, NOT `on_reveal_move` directly,
+        so the `[from]` guard runs. `on_reveal_move` is an internal state
+        recorder used by `on_move` and the harness fallback path.
+
         Tasks 6 + 7 will extend this method with R3 + R1 logic. R2 (this
         task): if the opp uses a status-category move, Assault Vest is
         ruled out (AV blocks status moves entirely).
+
+        ORDER NOTE for Tasks 6+7: R1 (two-different-moves Choice disproof)
+        must fire BEFORE the `on_reveal_move` call — R1 needs to compare
+        the new move against the PREVIOUS `last_used_move`, which
+        `on_reveal_move` overwrites. R3 (damaging-move LO elimination)
+        fires AFTER state recording, alongside R2. Final order:
+            [from] guard → R1 → on_reveal_move → R2 → R3
         """
+        # Defensive: callers should pass a list, but Task 9 harness wiring
+        # is the first real producer and a malformed protocol line could
+        # surface as None. Treat None as "no [from] tokens" (active move).
+        if split_msg is None:
+            split_msg = []
         if is_passive_move_event(split_msg):
             return  # Passive — don't update revealed_moves or fire rules
         # Pass through to skeleton state recording (revealed_moves, last_used)
