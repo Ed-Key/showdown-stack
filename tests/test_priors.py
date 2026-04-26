@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from showdown_copilot.belief import OpponentBelief
 from showdown_copilot.priors import (
     PriorsSource,
     _weighted_pick,
@@ -154,8 +155,6 @@ def test_sample_k_sets_diversity_typical_species(tmp_path):
 
 
 # ---------------- Belief-aware tests (Plan H Phase 1 Task 2) ----------------
-
-from showdown_copilot.belief import OpponentBelief
 
 
 @pytest.fixture

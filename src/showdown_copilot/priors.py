@@ -301,16 +301,22 @@ class PriorsSource:
         for key, weight in moves_dist.items():
             norm_to_key[_normalize(key)] = (key, float(weight))
 
-        # Step 1: ensure every revealed move exists in the chaos distribution
+        # Defensive: every revealed move must exist in the chaos distribution.
+        # Verify ALL of them up front (not just the first 4 we'd keep) so a
+        # bogus 5th revealed move fails the filter loudly instead of being
+        # silently dropped.
+        if not revealed.issubset(norm_to_key.keys()):
+            return None
+
+        # Iterate revealed in sorted order for log/debug determinism (Python
+        # set iteration order is implementation-dependent).
         kept: list[str] = []
-        for rev in revealed:
-            if rev not in norm_to_key:
-                return None  # revealed move not in chaos data
+        for rev in sorted(revealed):
             kept.append(rev)
             if len(kept) >= 4:
                 break
 
-        # Step 2: fill remaining slots with the top moves (excluding kept)
+        # Fill remaining slots with the top moves (excluding kept)
         remaining = [
             (norm, w) for norm, (_key, w) in norm_to_key.items()
             if norm not in kept
@@ -476,11 +482,15 @@ class PriorsSource:
         for key, weight in moves_dist.items():
             norm_to_key[_normalize(key)] = (key, float(weight))
 
-        # Verify revealed moves exist
+        # Defensive: ALL revealed moves must exist in the chaos distribution.
+        # Verify up front so a bogus 5th move fails loudly rather than being
+        # silently dropped.
+        if not revealed.issubset(norm_to_key.keys()):
+            return None
+
+        # Iterate revealed in sorted order for log/debug determinism.
         kept: list[str] = []
-        for rev in revealed:
-            if rev not in norm_to_key:
-                return None
+        for rev in sorted(revealed):
             kept.append(rev)
             if len(kept) >= 4:
                 break
