@@ -130,6 +130,44 @@ class SpectatorAdapter:
             out[norm_species] = sampled.to_pokemon_spec()
         return out
 
+    def _build_belief_aware_battle_adapter(self) -> BattleAdapter:
+        """Construct a BattleAdapter whose opponent_team is the belief-aware
+        modal set for each opp species. Shared by `to_engine_format` and the
+        non-PIMC branch of `to_engine_json`.
+
+        The modal lookup passes `belief=self._belief.get(norm_species)` so
+        the priors filter (Plan H Task 2) consults revealed_moves /
+        impossible_items / impossible_abilities. Falls back to the species
+        modal if the belief filter eliminates every candidate.
+        """
+        opp_specs_with_belief: dict[str, PokemonSpec] = {}
+        for norm_species, current_spec in self._opp_specs.items():
+            display_name = self._opp_display_names.get(
+                norm_species, current_spec.species,
+            )
+            modal = self._priors.get_set(
+                species=display_name,
+                format=self._format,
+                team_type=self._team_type,
+                belief=self._belief.get(norm_species),
+            )
+            opp_specs_with_belief[norm_species] = modal.to_pokemon_spec()
+        return BattleAdapter(
+            own_team=self._own_team,
+            opponent_team=list(opp_specs_with_belief.values()),
+        )
+
+    def to_engine_format(self, battle: Any) -> dict[str, Any]:
+        """Produce a single BattleRequest dict matching BattleAdapter's
+        contract, using belief-aware modal sets for the opponent team.
+
+        This is the entry point used by MCTSPlayer's non-PIMC code path
+        (Plan H Task 9 fix). PIMC's K-hypothesis fan-out lives on
+        `to_engine_json` only — this method always returns a single
+        BattleRequest, never `{"hypotheses": [...]}`.
+        """
+        return self._build_belief_aware_battle_adapter().to_engine_format(battle)
+
     def to_engine_json(self, battle: Any) -> dict[str, Any]:
         """Produce the BattleRequest JSON that poke-engine /analyze[/stream] consumes.
 
@@ -150,21 +188,4 @@ class SpectatorAdapter:
             return {"hypotheses": hypotheses}
         else:
             # Belief-aware modal selection per opp species (Plan H Task 3).
-            opp_specs_with_belief: dict[str, PokemonSpec] = {}
-            for norm_species, current_spec in self._opp_specs.items():
-                display_name = self._opp_display_names.get(
-                    norm_species, current_spec.species,
-                )
-                modal = self._priors.get_set(
-                    species=display_name,
-                    format=self._format,
-                    team_type=self._team_type,
-                    belief=self._belief.get(norm_species),
-                )
-                opp_specs_with_belief[norm_species] = modal.to_pokemon_spec()
-
-            inner = BattleAdapter(
-                own_team=self._own_team,
-                opponent_team=list(opp_specs_with_belief.values()),
-            )
-            return inner.to_engine_format(battle)
+            return self._build_belief_aware_battle_adapter().to_engine_format(battle)

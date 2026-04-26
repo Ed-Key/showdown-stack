@@ -474,3 +474,46 @@ def test_revealed_dict_attribute_removed():
         "_revealed dict should be gone — replaced by _belief BeliefTracker"
     )
     assert hasattr(sa, "_belief")
+
+
+# ---------- Plan H Task 9 fix: to_engine_format for non-PIMC harness path ----------
+
+
+def test_to_engine_format_returns_single_battlerequest_shape():
+    """to_engine_format (used by MCTSPlayer non-PIMC code path) must return
+    a single BattleRequest dict — NOT the {"hypotheses": [...]} envelope.
+    """
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+
+    fake_battle = _make_fake_battle()
+    out = sa.to_engine_format(fake_battle)
+
+    assert "hypotheses" not in out, (
+        "to_engine_format must always return a single BattleRequest, "
+        "never the PIMC fan-out envelope"
+    )
+    # BattleAdapter.to_engine_format contract — same top-level keys.
+    assert "sideOne" in out
+    assert "sideTwo" in out
+    assert "weather" in out
+    assert "terrain" in out
+    assert "trickRoom" in out
+    assert "timeLimit" in out
+
+
+def test_to_engine_format_passes_belief_to_get_set():
+    """to_engine_format must plumb belief through to priors.get_set the
+    same way to_engine_json does."""
+    priors = StubPriors({"garchomp": _modal("garchomp")})
+    sa = SpectatorAdapter(OWN_PASTE, "gen9monotype", "Ground", priors)
+    sa.on_team_preview(["Garchomp"])
+    sa.on_reveal("Garchomp", revealed_move="Earthquake")
+
+    fake_battle = _make_fake_battle()
+    sa.to_engine_format(fake_battle)
+
+    assert priors.last_belief is not None
+    assert priors.last_belief.species == "garchomp"
+    assert "earthquake" in priors.last_belief.revealed_moves
