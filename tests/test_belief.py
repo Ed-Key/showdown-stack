@@ -374,15 +374,21 @@ def test_R3_damaging_move_eliminates_lifeorb_normal_case():
 
 
 def test_R3_lifeorb_keepable_for_sheerforce_candidate():
-    """Tauros-Paldea-Aqua has Sheer Force as one of its abilities — LO
-    can be on Tauros without us seeing recoil. R3 must NOT fire."""
+    """Nidoking has Sheer Force as HA — LO can be on Nidoking without us
+    seeing recoil (SF suppresses LO recoil on secondary-effect moves).
+    R3 must NOT fire.
+
+    Note: this test was originally fixtured with Tauros-Paldea-Aqua,
+    but Paldean Tauros forms have Intimidate / Anger Point / Cud Chew —
+    NOT Sheer Force. Only base Tauros has SF. Audit 2026-04-26 caught
+    this self-reinforcing wrong test (Plan H Task 6 review)."""
     t = BeliefTracker()
-    t.on_switch_in("Tauros-Paldea-Aqua")
+    t.on_switch_in("Nidoking")
     t.on_move(
-        "Tauros-Paldea-Aqua", "Aqua Jet",
-        split_msg=["|move|", "p2a: Tauros-Paldea-Aqua", "Aqua Jet"],
+        "Nidoking", "Earthquake",
+        split_msg=["|move|", "p2a: Nidoking", "Earthquake"],
     )
-    b = t.get("Tauros-Paldea-Aqua")
+    b = t.get("Nidoking")
     assert "lifeorb" not in b.impossible_items
 
 
@@ -412,3 +418,45 @@ def test_R3_does_not_fire_on_status_move():
     assert "assaultvest" in b.impossible_items
     # R3 doesn't fire on status moves
     assert "lifeorb" not in b.impossible_items
+
+
+def test_SHEERFORCE_OR_MAGICGUARD_SPECIES_pool_membership():
+    """REGRESSION (Plan H Task 6 review): every species in the R3
+    exemption set must ACTUALLY have Sheer Force or Magic Guard in its
+    gen 9 ability pool. Verified against poke-env's authoritative
+    pokedex data so future drift is caught at commit time.
+
+    Without this test, the original Task 6 implementation included 11
+    species that did NOT actually have SF/MG (taurospaldea forms,
+    darmanitan-galar, krookodile, mienshao, bouffalant, irontreads,
+    ursaring, spinda, alakazammega) — silent R3 false-negatives.
+
+    This test is also the natural Phase-2 transition path: once the
+    set is derived programmatically from chaos data, this test stays
+    relevant as the regression guard.
+    """
+    from poke_env.data import GenData
+
+    from showdown_copilot.belief import _SHEERFORCE_OR_MAGICGUARD_SPECIES
+
+    pokedex = GenData.from_gen(9).pokedex
+    relevant_abilities = {"sheerforce", "magicguard"}
+
+    failures = []
+    for species_id in _SHEERFORCE_OR_MAGICGUARD_SPECIES:
+        if species_id not in pokedex:
+            failures.append(f"{species_id!r}: not in poke-env gen9 pokedex")
+            continue
+        # poke-env pokedex entries: {"abilities": {"0": "...", "1": "...", "H": "..."}, ...}
+        abilities = pokedex[species_id].get("abilities", {})
+        normalized = {_normalize(name) for name in abilities.values()}
+        if not (relevant_abilities & normalized):
+            failures.append(
+                f"{species_id!r}: ability pool {sorted(normalized)} contains neither SF nor MG"
+            )
+
+    assert not failures, (
+        "Some species in _SHEERFORCE_OR_MAGICGUARD_SPECIES don't actually "
+        "have SF or MG — these would cause R3 to silently miss inferences:\n  "
+        + "\n  ".join(failures)
+    )

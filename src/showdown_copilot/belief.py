@@ -191,23 +191,34 @@ _ABILITY_TO_WEATHER: dict[str, str] = {
 # Task 8 (R4) for the same data-driven approach to Levitate / Magic
 # Guard. Use normalized species ids (lowercase alphanumeric) — they're
 # compared against `_normalize(species)`.
+#
+# AUDITED 2026-04-26 against poke-env's gen9 pokedex (Plan H Task 6
+# review). Removed 11 species that DO NOT actually have SF or MG in
+# their gen-9 ability pool — each was a silent R3 false-negative:
+# - taurospaldea{combat,blaze,aqua} (Intimidate / Anger Point / Cud Chew)
+# - darmanitangalar / darmanitangalarzen (Gorilla Tactics / Zen Mode)
+# - krookodile (Intimidate / Moxie / Anger Point)
+# - mienshao (Inner Focus / Regenerator / Reckless)
+# - bouffalant (Reckless / Sap Sipper / Soundproof)
+# - irontreads (Quark Drive only — Paradox)
+# - ursaring (Guts / Quick Feet / Unnerve)
+# - spinda (Own Tempo / Tangled Feet / Contrary)
+# - alakazammega (Trace only — Mega replaces base ability)
+# Only base Tauros (not Paldean) has Sheer Force in its pool.
+# `test_pool_membership_sanity` enforces this set against poke-env
+# data so future drift is caught at commit time.
 _SHEERFORCE_OR_MAGICGUARD_SPECIES: frozenset[str] = frozenset({
-    # Sheer Force candidates (gen9 NatDex pool). Normalized species ids
-    # match what `_normalize(showdown_species_name)` produces — for
-    # Paldean Tauros forms that's "taurospaldea{combat,blaze,aqua}"
-    # (Showdown form names are Combat / Blaze / Aqua, not Fire / Water).
-    "tauros",
-    "taurospaldeacombat", "taurospaldeablaze", "taurospaldeaaqua",
-    "darmanitan", "darmanitangalar", "darmanitangalarzen",
-    "feraligatr", "krookodile", "mienshao",
-    "nidoking", "nidoqueen",
-    "ursaring", "rampardos", "bouffalant",
-    "irontreads",
-    # Magic Guard candidates
-    "sigilyph", "alakazam", "alakazammega",
-    "clefable", "clefairy", "cleffa",
-    "reuniclus", "duosion", "solosis",
-    "spinda",
+    # Sheer Force candidates (verified gen9 NatDex pool)
+    "tauros",                                # Anger Point / Sheer Force / Cud Chew
+    "darmanitan",                            # Sheer Force / Zen Mode (HA)
+    "feraligatr",                            # Torrent / Sheer Force (HA)
+    "nidoking", "nidoqueen",                 # Poison Point / Rivalry / Sheer Force (HA)
+    "rampardos",                             # Mold Breaker / Sheer Force (HA)
+    # Magic Guard candidates (verified gen9 NatDex pool)
+    "sigilyph",                              # Wonder Skin / Magic Guard / Tinted Lens
+    "alakazam",                              # Synchronize / Inner Focus / Magic Guard (HA)
+    "clefable", "clefairy", "cleffa",        # Cute Charm / Magic Guard / Unaware
+    "reuniclus", "duosion", "solosis",       # Overcoat / Magic Guard / Regenerator
     # Not exhaustive — Phase 2 should derive from chaos data
 })
 
