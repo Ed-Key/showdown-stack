@@ -193,3 +193,69 @@ def test_clear_drops_all_beliefs_in_place():
     # All belief state is gone — fresh OpponentBelief is built lazily
     assert t.get("Garchomp").revealed_moves == set()
     assert t.get("Garchomp").revealed_item is None
+
+
+# ---------- R5 (Task 4): auto-trigger abilities ruled out on switch-in ----------
+
+
+def test_R5_eagerly_rules_out_intimidate_on_switch_in():
+    """A vanilla switch-in with no special conditions: all auto-trigger
+    abilities should be ruled out (the protocol *would* have announced)."""
+    t = BeliefTracker()
+    t.on_switch_in("Landorus-Therian")
+    b = t.get("Landorus-Therian")
+    assert "intimidate" in b.impossible_abilities
+    assert "sandstream" in b.impossible_abilities
+    assert "pressure" in b.impossible_abilities
+
+
+def test_R5_carve_out_a_gen3_pressure_skipped():
+    """Pressure is silent in gen 3 — don't rule it out."""
+    t = BeliefTracker()
+    t.on_switch_in("Mewtwo", generation=3)
+    b = t.get("Mewtwo")
+    assert "pressure" not in b.impossible_abilities
+    # Other abilities still get ruled out
+    assert "intimidate" in b.impossible_abilities
+
+
+def test_R5_carve_out_b_sandstream_skipped_when_sand_already_up():
+    """Sand is already up when Tyranitar switches in → Sand Stream
+    can't be ruled out (the announcement would have been silent)."""
+    t = BeliefTracker()
+    t.on_switch_in("Tyranitar", current_weather="sandstorm")
+    b = t.get("Tyranitar")
+    assert "sandstream" not in b.impossible_abilities
+    # Other weather-setters still get ruled out (different weathers)
+    assert "drought" in b.impossible_abilities
+    assert "drizzle" in b.impossible_abilities
+    assert "snowwarning" in b.impossible_abilities
+    # Non-weather abilities still get ruled out
+    assert "intimidate" in b.impossible_abilities
+
+
+def test_R5_carve_out_c_neutralizing_gas_skips_entire_pass():
+    """Our active has Neutralizing Gas → all opp on-switch-in
+    announcements are suppressed; nothing is ruled out."""
+    t = BeliefTracker()
+    t.on_switch_in("Landorus-Therian", our_active_ability="Neutralizing Gas")
+    b = t.get("Landorus-Therian")
+    assert b.impossible_abilities == set()
+
+
+def test_R5_revealed_ability_overrides_false_impossibility():
+    """If the protocol later reveals Intimidate (e.g. it DID fire and
+    we see the -ability event), revealed_ability is set positively;
+    R5's earlier impossible_abilities entry is no longer load-bearing
+    because revealed_ability is the source of truth.
+
+    This test documents the design contract; the priors filter
+    consults revealed_ability first, then impossible_abilities."""
+    t = BeliefTracker()
+    t.on_switch_in("Landorus-Therian")  # ruled out
+    t.on_reveal_ability("Landorus-Therian", "Intimidate")  # actually has it
+    b = t.get("Landorus-Therian")
+    assert b.revealed_ability == "intimidate"
+    # impossible_abilities still contains the entry — this is fine; the
+    # priors filter prefers revealed_ability when set.
+    assert "intimidate" in b.impossible_abilities

@@ -106,6 +106,33 @@ def has_type(
     return any(target_type.lower() == t.lower() for t in base_types)
 
 
+# Abilities that announce themselves on switch-in. Absence of the
+# announcement → ability ruled out, modulo the carve-outs below.
+# Drives R5 (Task 4): on every opp switch-in we eagerly add ALL of these
+# to impossible_abilities, with three carve-outs (gen3 Pressure silent,
+# weather-setter when matching weather already up, our active has
+# Neutralizing Gas which suppresses the entire pass).
+_AUTO_TRIGGER_ABILITIES_ON_SWITCH_IN: frozenset[str] = frozenset({
+    "intimidate",
+    "sandstream",
+    "drought",
+    "drizzle",
+    "snowwarning",
+    "pressure",
+    "neutralizinggas",
+})
+
+# Map weather-setter ability → matching weather (Showdown protocol id,
+# lowercase). Used by R5 carve-out (b): a weather-setter is silent on
+# switch-in if the matching weather is already up.
+_ABILITY_TO_WEATHER: dict[str, str] = {
+    "sandstream": "sandstorm",
+    "drought": "sunnyday",
+    "drizzle": "raindance",
+    "snowwarning": "snow",
+}
+
+
 # ---------- BeliefTracker ----------
 
 
@@ -204,19 +231,31 @@ class BeliefTracker:
         b.tera_type = _normalize(tera_type)
 
     def on_switch_in(
-        self, species: str, side_hazards: dict[str, int] | None = None
+        self,
+        species: str,
+        side_hazards: dict[str, int] | None = None,
+        current_weather: str | None = None,
+        generation: int = 9,
+        our_active_ability: str | None = None,
     ) -> None:
         """Called when `species` switches in to the opp's active slot.
 
         Resets per-Pokemon switch-in state and records active hazards on
         the opp side. R4 reads `side_hazards_at_switch_in` at end-of-turn;
-        R5 fires here directly via Task 4 (eager-add of auto-trigger
-        abilities to impossible_abilities, with weather/Pressure/NGas
-        carve-outs).
+        R5 fires inline here via `eagerly_rule_out_auto_trigger_abilities`.
 
-        Note: Task 4 extends this signature with `current_weather`,
-        `generation`, and `our_active_ability` kwargs to drive R5's
-        carve-outs. Phase-1 skeleton just resets state.
+        Args:
+            species: opp Pokemon switching in (display or normalized form).
+            side_hazards: hazard ids → layer count active on the opp side.
+            current_weather: Showdown protocol weather id (lowercase) —
+                "sandstorm" / "sunnyday" / "raindance" / "snow" / None.
+                Drives R5 carve-out (b): a weather-setter is silent on
+                switch-in if the matching weather is already up.
+            generation: gen number; drives R5 carve-out (a) — gen 3
+                Pressure is silent on switch-in. Defaults to 9.
+            our_active_ability: our active Pokemon's ability (display or
+                normalized form). Drives R5 carve-out (c) — Neutralizing
+                Gas suppresses ALL opp on-switch-in announcements.
         """
         b = self.get(species)
         b.just_switched_in = True
@@ -225,6 +264,56 @@ class BeliefTracker:
         # Move-history is per-stretch-on-field; reset on switch in
         b.moves_used_since_switch_in = []
         b.last_used_move = None
+        # R5: eager rule-out of auto-trigger abilities (constant-size loop)
+        self.eagerly_rule_out_auto_trigger_abilities(
+            species=species,
+            current_weather=current_weather,
+            generation=generation,
+            our_active_ability=our_active_ability,
+        )
+
+    def eagerly_rule_out_auto_trigger_abilities(
+        self,
+        species: str,
+        current_weather: str | None,
+        generation: int,
+        our_active_ability: str | None,
+    ) -> None:
+        """R5 — opponent just switched in. For each auto-trigger ability,
+        if the announcement *would* have fired and didn't, rule it out by
+        adding it to `impossible_abilities`.
+
+        Carve-outs (skip = leave the ability possible):
+        (a) gen 3 Pressure is silent in that gen — skip Pressure if gen==3.
+        (b) Weather-setter abilities are silent if the matching weather
+            is already up — skip the matching one in that case.
+        (c) Our active has Neutralizing Gas — suppresses ALL opp
+            on-switch-in announcements; skip the entire pass.
+
+        Note: this fires unconditionally on every switch-in. If the opp
+        DOES have one of these abilities, the protocol's separate ability
+        announcement will trigger `on_reveal_ability`, setting
+        `revealed_ability` positively. The priors filter consults
+        `revealed_ability` first, then `impossible_abilities` — so a
+        positive reveal overrides any false impossibility recorded here.
+        """
+        # Carve-out (c): if our active suppresses ALL announcements, bail.
+        if our_active_ability and _normalize(our_active_ability) == "neutralizinggas":
+            return
+
+        # Normalize current_weather once so carve-out (b) compares cleanly.
+        norm_weather = _normalize(current_weather) if current_weather else None
+
+        b = self.get(species)
+        for ab in _AUTO_TRIGGER_ABILITIES_ON_SWITCH_IN:
+            # Carve-out (a): gen 3 Pressure is silent.
+            if ab == "pressure" and generation == 3:
+                continue
+            # Carve-out (b): weather-setter when matching weather already up.
+            matching_weather = _ABILITY_TO_WEATHER.get(ab)
+            if matching_weather and norm_weather == matching_weather:
+                continue
+            b.impossible_abilities.add(ab)
 
     def on_switch_out(self, species: str) -> None:
         """Called when `species` switches out. Clears the just-switched-in
