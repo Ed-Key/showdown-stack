@@ -148,3 +148,31 @@ def test_on_hazard_damage_sets_flag():
     # Cleared at turn boundary
     t.on_turn_boundary()
     assert t.get("Skarmory").took_hazard_damage_this_stretch is False
+
+
+def test_on_reveal_move_ignores_empty_string():
+    """REGRESSION (Task 1 review): an empty move_id must NOT corrupt R1
+    state. _normalize("") returns "", and without a guard the empty string
+    would be added to revealed_moves and set as last_used_move — causing
+    R1 to fire spuriously on the NEXT real move ("" != real_move)."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_reveal_move("Garchomp", "")
+    b = t.get("Garchomp")
+    assert b.revealed_moves == set()
+    assert b.last_used_move is None
+    assert b.moves_used_since_switch_in == []
+
+
+def test_on_reveal_item_ignores_empty_string():
+    """REGRESSION: empty item_id must not set revealed_item to ""."""
+    t = BeliefTracker()
+    t.on_reveal_item("Garchomp", "")
+    assert t.get("Garchomp").revealed_item is None
+
+
+def test_on_reveal_ability_ignores_empty_string():
+    """REGRESSION: empty ability_id must not set revealed_ability to ""."""
+    t = BeliefTracker()
+    t.on_reveal_ability("Garchomp", "")
+    assert t.get("Garchomp").revealed_ability is None

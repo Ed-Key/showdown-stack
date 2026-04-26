@@ -136,22 +136,38 @@ class BeliefTracker:
         inference-rule firings (R1, R2, R3) are added in Tasks 4-7
         with `[from]`-token guard at the call site (caller must check
         is_passive_move_event before calling this method).
+
+        Empty / whitespace-only `move_id` is ignored — _normalize would
+        produce "", which would silently corrupt R1 state (last_used_move
+        would compare unequal to any real move on the next call).
         """
-        b = self.get(species)
         norm_move = _normalize(move_id)
+        if not norm_move:
+            return
+        b = self.get(species)
         b.revealed_moves.add(norm_move)
         b.last_used_move = norm_move
         b.moves_used_since_switch_in.append(norm_move)
 
     def on_reveal_item(self, species: str, item_id: str) -> None:
-        """Record opp's item identity (PROTOCOL-asserted, not inferred)."""
+        """Record opp's item identity (PROTOCOL-asserted, not inferred).
+        Empty / whitespace-only `item_id` is ignored.
+        """
+        norm_item = _normalize(item_id)
+        if not norm_item:
+            return
         b = self.get(species)
-        b.revealed_item = _normalize(item_id)
+        b.revealed_item = norm_item
 
     def on_reveal_ability(self, species: str, ability_id: str) -> None:
-        """Record opp's ability identity."""
+        """Record opp's ability identity. Empty / whitespace-only
+        `ability_id` is ignored.
+        """
+        norm_ability = _normalize(ability_id)
+        if not norm_ability:
+            return
         b = self.get(species)
-        b.revealed_ability = _normalize(ability_id)
+        b.revealed_ability = norm_ability
 
     def on_item_swapped(
         self, species: str, new_item: str | None, old_item: str | None
