@@ -230,30 +230,26 @@ _CHOICE_ITEMS: frozenset[str] = frozenset({
     "choiceband", "choicescarf", "choicespecs",
 })
 
-# Moves that are categorically incompatible with Choice items: status
-# setups, recovery, Substitute, protection moves, Leech Seed. If an opp
-# uses any of these even once, Choice items are immediately ruled out
-# (the move would have failed under Choice lock — once locked to the
-# damaging first move you can't use a status move without switching).
+# Moves that are categorically incompatible with Choice items. The
+# categorical fact is: Choice locks the holder to its first move AND
+# requires that move to be damaging-category. Therefore observing the
+# opp use any STATUS-category move proves they aren't Choice-locked
+# (the move would have failed under the lock).
 #
-# Conservative — only categorically-Choice-impossible moves. Knock Off,
-# U-turn, Volt Switch, Flip Turn are damaging and Choice-COMPATIBLE
-# (Choice users routinely run U-turn for momentum), so they're NOT here.
-_CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = frozenset({
-    # Setup boosting moves
-    "swordsdance", "nastyplot", "calmmind", "bulkup", "irondefense",
-    "shellsmash", "dragondance", "quiverdance", "tailglow",
-    "agility", "rockpolish", "autotomize",
-    "amnesia", "barrier", "cosmicpower", "stockpile",
-    "victorydance", "noretreat",
-    # Recovery
-    "roost", "recover", "softboiled", "synthesis", "moonlight",
-    "morningsun", "milkdrink", "wish", "slackoff", "shoreup",
-    "rest", "healorder", "lifedew",
-    # Other categorically Choice-impossible
-    "substitute", "protect", "detect", "spikyshield", "kingsshield",
-    "obstruct", "banefulbunker", "burningbulwark", "silktrap",
-    "leechseed",
+# Derived from _STATUS_MOVES, with two exceptions where status-and-
+# Choice-compatible:
+# - Trick / Switcheroo: a Choice user CAN use these as their locked-
+#   into first move to pass the Choice item to opp (a real strategy).
+#   Observing Trick/Switcheroo doesn't prove the user isn't Choice-locked.
+#
+# Damaging pivots (Knock Off, U-turn, Volt Switch, Flip Turn) are not
+# here because they're not in _STATUS_MOVES — they're damaging-category
+# and Choice users routinely run U-turn for momentum.
+#
+# `test_CHOICE_INCOMPATIBLE_MOVES_subset_of_STATUS_MOVES` enforces this
+# derivation invariant at commit time so future drift is caught.
+_CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = _STATUS_MOVES - frozenset({
+    "trick", "switcheroo",
 })
 
 

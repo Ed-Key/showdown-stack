@@ -567,3 +567,102 @@ def test_R1_early_disprove_substitute():
               split_msg=["|move|", "p2a: Kingambit", "Substitute"])
     b = t.get("Kingambit")
     assert "choiceband" in b.impossible_items
+
+
+def test_R1_early_disprove_roost():
+    """Recovery moves are categorically Choice-impossible (you can't use
+    a status move under Choice lock). Roost on first observation rules
+    out all 3 Choice items."""
+    t = BeliefTracker()
+    t.on_switch_in("Corviknight")
+    t.on_move("Corviknight", "Roost",
+              split_msg=["|move|", "p2a: Corviknight", "Roost"])
+    b = t.get("Corviknight")
+    assert "choiceband" in b.impossible_items
+    assert "choicescarf" in b.impossible_items
+    assert "choicespecs" in b.impossible_items
+
+
+def test_R1_early_disprove_protect():
+    """Protection moves (Protect, Detect, Spiky Shield, etc.) are
+    Choice-impossible — they're status-category and not damaging."""
+    t = BeliefTracker()
+    t.on_switch_in("Toxapex")
+    t.on_move("Toxapex", "Protect",
+              split_msg=["|move|", "p2a: Toxapex", "Protect"])
+    b = t.get("Toxapex")
+    assert "choiceband" in b.impossible_items
+
+
+def test_R1_early_disprove_leechseed():
+    """Leech Seed is status-category and Choice-impossible."""
+    t = BeliefTracker()
+    t.on_switch_in("Ferrothorn")
+    t.on_move("Ferrothorn", "Leech Seed",
+              split_msg=["|move|", "p2a: Ferrothorn", "Leech Seed"])
+    b = t.get("Ferrothorn")
+    assert "choiceband" in b.impossible_items
+
+
+def test_R1_post_trick_resumes_normally_on_subsequent_two_different_moves():
+    """REGRESSION (Plan H Task 7 review): on_item_swapped resets R1 state
+    (last_used_move=None) so the IMMEDIATE next move can't fire R1.
+    But subsequent moves CAN fire R1 normally — if a Tricked-CB Pokemon
+    uses 2 different moves WITHOUT switching out, that's evidence they
+    are NOT actually Choice-locked (a real CB user is locked to one move
+    until switch-out).
+
+    Pins the contract that 'reset is one-shot, R1 resumes after.'"""
+    t = BeliefTracker()
+    t.on_switch_in("Mew")
+    # Pre-Trick move
+    t.on_move("Mew", "Earthquake",
+              split_msg=["|move|", "p2a: Mew", "Earthquake"])
+    # Trick fires — Mew now has CB, last_used_move reset to None
+    t.on_item_swapped("Mew", new_item="Choice Band", old_item="Lagging Tail")
+    # First post-Trick move: R1 doesn't fire (last_used_move was None)
+    t.on_move("Mew", "Stone Edge",
+              split_msg=["|move|", "p2a: Mew", "Stone Edge"])
+    b = t.get("Mew")
+    assert "choiceband" not in b.impossible_items, (
+        "first post-Trick move shouldn't trigger R1 — no comparison baseline"
+    )
+    # Second post-Trick move (different): R1 fires normally — observing
+    # 2 different moves WITHOUT a switch proves Mew isn't Choice-locked,
+    # despite the CB reveal. (If they were locked to Stone Edge, they
+    # couldn't use Earthquake without switching first.)
+    t.on_move("Mew", "Earthquake",
+              split_msg=["|move|", "p2a: Mew", "Earthquake"])
+    b = t.get("Mew")
+    assert "choiceband" in b.impossible_items, (
+        "R1 should resume on subsequent moves — 2 different moves "
+        "post-Trick without a switch proves the holder isn't Choice-locked"
+    )
+
+
+def test_CHOICE_INCOMPATIBLE_MOVES_subset_of_STATUS_MOVES():
+    """REGRESSION (Plan H Task 7 review): _CHOICE_INCOMPATIBLE_MOVES
+    must be a subset of _STATUS_MOVES (minus Trick/Switcheroo which
+    are status-category but Choice-COMPATIBLE — a Choice user can run
+    Trick to pass the item).
+
+    If a future contributor adds a damaging move (e.g., misclassifies
+    U-turn) to _CHOICE_INCOMPATIBLE_MOVES, R1 early-disprove would
+    silently fire on a Choice-COMPATIBLE move and produce wrong
+    inferences. This test catches that drift at commit time.
+    """
+    from showdown_copilot.belief import (
+        _CHOICE_INCOMPATIBLE_MOVES,
+        _STATUS_MOVES,
+    )
+    leaks = _CHOICE_INCOMPATIBLE_MOVES - _STATUS_MOVES
+    assert not leaks, (
+        f"R1 early-disprove would mis-fire on non-status moves: {sorted(leaks)}"
+    )
+    # And the explicit exclusions: Trick/Switcheroo are in _STATUS_MOVES
+    # (R2 fires on them) but NOT in _CHOICE_INCOMPATIBLE_MOVES (Choice-
+    # compatible).
+    assert "trick" not in _CHOICE_INCOMPATIBLE_MOVES
+    assert "switcheroo" not in _CHOICE_INCOMPATIBLE_MOVES
+    assert "trick" in _STATUS_MOVES
+    assert "switcheroo" in _STATUS_MOVES
