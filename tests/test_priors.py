@@ -151,3 +151,171 @@ def test_sample_k_sets_diversity_typical_species(tmp_path):
     sets = src.sample_k_sets("Garchomp", k=4, format="gen9ou", rng=rng)
     tuples = {(s.item, s.ability, s.nature, tuple(sorted(s.moves))) for s in sets}
     assert len(tuples) >= 2, f"K=4 produced only {len(tuples)} unique tuples; sampler too narrow"
+
+
+# ---------------- Belief-aware tests (Plan H Phase 1 Task 2) ----------------
+
+from showdown_copilot.belief import OpponentBelief
+
+
+@pytest.fixture
+def fake_priors_with_garchomp(tmp_path):
+    """A PriorsSource backed by a tiny in-tmp chaos JSON with one species
+    that has multiple plausible items, abilities, and moves.
+
+    Note: chaos keys are intentionally lowercase-alphanumeric here to match
+    how Smogon writes move/item/ability ids in the JSON. The belief-filter
+    code normalizes both sides before comparing, so display-cased keys
+    would also work — see test_get_set_belief_normalizes_display_cased_moves.
+    """
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {
+                    "earthquake": 50, "stealthrock": 40, "spikes": 30,
+                    "dragontail": 20, "swordsdance": 15, "scaleshot": 10,
+                    "stoneedge": 8,
+                },
+                "Items": {"rockyhelmet": 50, "lifeorb": 40, "leftovers": 20},
+                "Abilities": {"roughskin": 90, "sandveil": 10},
+                "Spreads": {"Jolly:0/252/0/0/4/252": 80},
+                "Tera Types": {"Steel": 50},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    return PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+
+
+def test_get_set_with_no_belief_matches_existing_modal(fake_priors_with_garchomp):
+    """Without belief, get_set should produce the same modal as before."""
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou")
+    # Earthquake is highest usage so it should be in the top-4
+    assert "earthquake" in out.moves
+    assert out.item == "rockyhelmet"  # top item
+    assert out.ability == "roughskin"
+
+
+def test_get_set_with_revealed_move_filters_to_consistent_set(fake_priors_with_garchomp):
+    """If revealed_moves contains 'stoneedge', the returned moveset must
+    include stoneedge even though it's not the top-4."""
+    belief = OpponentBelief(species="garchomp", revealed_moves={"stoneedge"})
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou", belief=belief)
+    assert "stoneedge" in out.moves
+
+
+def test_get_set_with_impossible_item_excludes_it(fake_priors_with_garchomp):
+    """If impossible_items includes 'rockyhelmet' (the modal), get_set
+    should pick the next-best item (lifeorb)."""
+    belief = OpponentBelief(species="garchomp", impossible_items={"rockyhelmet"})
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou", belief=belief)
+    assert out.item != "rockyhelmet"
+    assert out.item == "lifeorb"  # next highest
+
+
+def test_get_set_with_impossible_ability_excludes_it(fake_priors_with_garchomp):
+    """If impossible_abilities includes 'roughskin', get_set picks sandveil."""
+    belief = OpponentBelief(species="garchomp", impossible_abilities={"roughskin"})
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou", belief=belief)
+    assert out.ability == "sandveil"
+
+
+def test_get_set_with_revealed_item_forces_match(fake_priors_with_garchomp):
+    """If revealed_item is 'lifeorb' (not the modal), get_set returns it."""
+    belief = OpponentBelief(species="garchomp", revealed_item="lifeorb")
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou", belief=belief)
+    assert out.item == "lifeorb"
+
+
+def test_get_set_filter_empty_falls_back_to_unfiltered_modal(fake_priors_with_garchomp):
+    """If revealed_moves contains an unknown move, filter empty → fall back."""
+    belief = OpponentBelief(species="garchomp", revealed_moves={"jankymovenoone_uses"})
+    out = fake_priors_with_garchomp.get_set("Garchomp", format="gen9ou", belief=belief)
+    # Falls back: no jankymove in result, but we still got SOMETHING valid
+    assert "jankymovenoone_uses" not in out.moves
+    assert out.item in {"rockyhelmet", "lifeorb", "leftovers"}
+    assert out.ability in {"roughskin", "sandveil"}
+
+
+def test_get_set_belief_normalizes_display_cased_moves(tmp_path):
+    """If chaos keys are display-cased (e.g. 'Stealth Rock'), the belief
+    filter MUST normalize before comparing — `revealed_moves` always
+    contains normalized ids ('stealthrock')."""
+    data = {
+        "data": {
+            "Landorus-Therian": {
+                "Moves": {
+                    "Earthquake": 50, "Stealth Rock": 40, "U-turn": 30,
+                    "Stone Edge": 20, "Knock Off": 15,
+                },
+                "Items": {"Rocky Helmet": 50, "Leftovers": 30},
+                "Abilities": {"Intimidate": 100},
+                "Spreads": {"Impish:252/0/216/0/40/0": 60},
+                "Tera Types": {"Steel": 50},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    src = PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+    # 'stealthrock' is the normalized form of 'Stealth Rock'
+    belief = OpponentBelief(
+        species="landorustherian", revealed_moves={"stealthrock"}
+    )
+    out = src.get_set("Landorus-Therian", format="gen9ou", belief=belief)
+    # Result moves are normalized; the revealed move must be in there
+    assert "stealthrock" in out.moves
+
+
+def test_sample_set_with_belief_respects_revealed_move(tmp_path):
+    """sample_set with belief must include all revealed_moves in output."""
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {
+                    "earthquake": 50, "stealthrock": 40, "spikes": 30,
+                    "dragontail": 20, "swordsdance": 15, "scaleshot": 10,
+                    "stoneedge": 8,
+                },
+                "Items": {"rockyhelmet": 50, "lifeorb": 40, "leftovers": 20},
+                "Abilities": {"roughskin": 90, "sandveil": 10},
+                "Spreads": {"Jolly:0/252/0/0/4/252": 80},
+                "Tera Types": {"Steel": 50},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    src = PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+    belief = OpponentBelief(species="garchomp", revealed_moves={"stoneedge"})
+    rng = random.Random(7)
+    # Run a few samples — each must include stoneedge
+    for _ in range(5):
+        out = src.sample_set("Garchomp", format="gen9ou", rng=rng, belief=belief)
+        assert "stoneedge" in out.moves
+
+
+def test_sample_set_with_belief_falls_back_when_filter_empty(tmp_path):
+    """sample_set falls back to unfiltered sampling when belief filter empty."""
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {"earthquake": 50, "stealthrock": 40},
+                "Items": {"rockyhelmet": 50, "lifeorb": 40},
+                "Abilities": {"roughskin": 90},
+                "Spreads": {"Jolly:0/252/0/0/4/252": 80},
+                "Tera Types": {"Steel": 50},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    src = PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+    belief = OpponentBelief(species="garchomp", revealed_moves={"jankyunknown"})
+    rng = random.Random(0)
+    out = src.sample_set("Garchomp", format="gen9ou", rng=rng, belief=belief)
+    # Falls back to unfiltered: still produces a valid set
+    assert out.item in {"rockyhelmet", "lifeorb"}
+    assert out.ability == "roughskin"
+    assert "jankyunknown" not in out.moves

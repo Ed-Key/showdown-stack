@@ -6,11 +6,14 @@ import logging
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from showdown_copilot.models import ModalSet
+
+if TYPE_CHECKING:
+    from showdown_copilot.belief import OpponentBelief
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +140,11 @@ class PriorsSource:
         )
 
     def get_set(
-        self, species: str, format: str, team_type: str | None = None
+        self,
+        species: str,
+        format: str,
+        team_type: str | None = None,
+        belief: "OpponentBelief | None" = None,
     ) -> ModalSet:
         chaos = self._ensure_loaded(format)
         data = chaos.get("data", {})
@@ -156,6 +163,25 @@ class PriorsSource:
             )
             return self._neutral_default(species)
 
+        # Belief-aware path: filter candidate sets first, then modal-pick.
+        if belief is not None:
+            modal = self._modal_set_from_consistent_candidates(
+                species=species, entry=entry, belief=belief,
+            )
+            if modal is not None:
+                return modal
+            # Filter empty (e.g., revealed move not in any chaos set) →
+            # fall through to unfiltered modal so we always return SOMETHING.
+            logger.warning(
+                "belief filter empty for %s — falling back to unfiltered modal",
+                species,
+            )
+
+        return self._modal_set_from_entry(species, entry)
+
+    def _modal_set_from_entry(self, species: str, entry: dict) -> ModalSet:
+        """Existing modal-pick logic, factored out so the belief-aware
+        path can call it as a fallback when the candidate filter is empty."""
         moves = _top_n_keys(entry.get("Moves", {}), 4)
         item = _top_key(entry.get("Items", {})) or "none"
         ability = _top_key(entry.get("Abilities", {})) or "none"
@@ -182,12 +208,128 @@ class PriorsSource:
             weight_kg=0.0,
         )
 
+    def _modal_set_from_consistent_candidates(
+        self, species: str, entry: dict, belief: "OpponentBelief"
+    ) -> ModalSet | None:
+        """Build a ModalSet from chaos entry, filtered by belief constraints.
+
+        Filters:
+          - moves must be a superset of belief.revealed_moves
+          - item must NOT be in belief.impossible_items
+          - if belief.revealed_item is set, the item must equal it
+          - ability must NOT be in belief.impossible_abilities
+          - if belief.revealed_ability is set, the ability must equal it
+
+        Returns None if no candidates survive the filter (caller should
+        fall back to unfiltered modal). Returns a ModalSet built from the
+        modal pick over the FILTERED candidate distributions otherwise.
+        """
+        # Items: filter the chaos Items distribution
+        items_dist = {
+            k: v for k, v in entry.get("Items", {}).items()
+            if _normalize(k) not in belief.impossible_items
+            and (belief.revealed_item is None or _normalize(k) == belief.revealed_item)
+        }
+        if not items_dist:
+            return None  # no consistent item
+
+        # Abilities: same filter
+        abilities_dist = {
+            k: v for k, v in entry.get("Abilities", {}).items()
+            if _normalize(k) not in belief.impossible_abilities
+            and (belief.revealed_ability is None or _normalize(k) == belief.revealed_ability)
+        }
+        if not abilities_dist:
+            return None  # no consistent ability
+
+        # Moves: chaos data lists per-move usage, but we need to enforce that
+        # the chosen 4-move SET is a superset of revealed_moves. The simplest
+        # approach: take chaos top-N (say top-12) candidate moves, then choose
+        # 4 such that all revealed_moves are included. Falls back to top-4 if
+        # revealed_moves is empty.
+        moves_dist = entry.get("Moves", {})
+        if not moves_dist:
+            return None
+        chosen_moves = self._select_modal_moves_with_revealed(
+            moves_dist=moves_dist, revealed=belief.revealed_moves,
+        )
+        if chosen_moves is None:
+            return None  # revealed move not in chaos data at all
+
+        # Spreads: chaos spreads aren't reliably filterable by belief in
+        # Phase 1 (we'd need to derive Spe range from speed_range, which is
+        # Phase 2). For now, just modal-pick over the unfiltered Spreads.
+        spread_key = _top_key(entry.get("Spreads", {}))
+        if spread_key:
+            nature, evs = _parse_spread(spread_key)
+        else:
+            nature = "Serious"
+            evs = {k: 0 for k in ("hp", "atk", "def", "spa", "spd", "spe")}
+
+        # Tera: same — Phase 1 doesn't filter tera by belief
+        tera = _top_key(entry.get("Tera Types", {})) or ""
+
+        return ModalSet(
+            species=_normalize(species),
+            level=100,
+            types=[],
+            moves=chosen_moves,
+            item=_normalize(_top_key(items_dist) or "none"),
+            ability=_normalize(_top_key(abilities_dist) or "none"),
+            nature=nature,
+            evs=evs,
+            ivs={k: 31 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            stats={k: 100 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            tera_type=tera,
+            weight_kg=0.0,
+        )
+
+    def _select_modal_moves_with_revealed(
+        self, moves_dist: dict[str, float], revealed: set[str]
+    ) -> list[str] | None:
+        """Pick 4 distinct moves from `moves_dist` such that the result
+        is a superset of `revealed`. Returns None if a revealed move is
+        missing from the chaos distribution entirely.
+
+        Returned move ids are normalized (lowercase alphanumeric), matching
+        the convention used by `_top_n_keys` consumers downstream and by
+        `OpponentBelief.revealed_moves`.
+        """
+        # Map normalized → (display_key, weight) so we can match revealed
+        # set to chaos display names
+        norm_to_key: dict[str, tuple[str, float]] = {}
+        for key, weight in moves_dist.items():
+            norm_to_key[_normalize(key)] = (key, float(weight))
+
+        # Step 1: ensure every revealed move exists in the chaos distribution
+        kept: list[str] = []
+        for rev in revealed:
+            if rev not in norm_to_key:
+                return None  # revealed move not in chaos data
+            kept.append(rev)
+            if len(kept) >= 4:
+                break
+
+        # Step 2: fill remaining slots with the top moves (excluding kept)
+        remaining = [
+            (norm, w) for norm, (_key, w) in norm_to_key.items()
+            if norm not in kept
+        ]
+        remaining.sort(key=lambda kw: -kw[1])  # highest weight first
+        for norm, _w in remaining:
+            if len(kept) >= 4:
+                break
+            kept.append(norm)
+
+        return kept[:4]
+
     def sample_set(
         self,
         species: str,
         format: str,
         team_type: str | None = None,
         rng: random.Random | None = None,
+        belief: "OpponentBelief | None" = None,
     ) -> ModalSet:
         """Like get_set, but every field is weighted-random-drawn from the chaos
         distribution rather than picked modally. Same return shape.
@@ -211,6 +353,25 @@ class PriorsSource:
             )
             return self._neutral_default(species)
 
+        if belief is not None:
+            sampled = self._sample_set_with_belief(
+                species=species, entry=entry, belief=belief, rng=rng,
+            )
+            if sampled is not None:
+                return sampled
+            logger.warning(
+                "belief filter empty for %s sample — falling back to unfiltered",
+                species,
+            )
+
+        return self._sample_set_unfiltered(species, entry, rng)
+
+    def _sample_set_unfiltered(
+        self, species: str, entry: dict, rng: random.Random
+    ) -> ModalSet:
+        """Existing weighted-random sampling logic, factored out so the
+        belief-aware sampling path can call it as a fallback when the
+        candidate filter is empty."""
         moves = _weighted_pick_n_distinct(entry.get("Moves", {}), 4, rng)
         item = _weighted_pick(entry.get("Items", {}), rng) or "none"
         ability = _weighted_pick(entry.get("Abilities", {}), rng) or "none"
@@ -236,6 +397,106 @@ class PriorsSource:
             tera_type=tera,
             weight_kg=0.0,
         )
+
+    def _sample_set_with_belief(
+        self,
+        species: str,
+        entry: dict,
+        belief: "OpponentBelief",
+        rng: random.Random,
+    ) -> ModalSet | None:
+        """Belief-filtered weighted-random sampling. Mirror of
+        `_modal_set_from_consistent_candidates`, but uses `_weighted_pick`
+        instead of `_top_key` over the filtered distributions. Returns None
+        if any of the filtered distributions is empty (caller should fall
+        back to unfiltered sampling).
+        """
+        items_dist = {
+            k: v for k, v in entry.get("Items", {}).items()
+            if _normalize(k) not in belief.impossible_items
+            and (belief.revealed_item is None or _normalize(k) == belief.revealed_item)
+        }
+        if not items_dist:
+            return None
+
+        abilities_dist = {
+            k: v for k, v in entry.get("Abilities", {}).items()
+            if _normalize(k) not in belief.impossible_abilities
+            and (belief.revealed_ability is None or _normalize(k) == belief.revealed_ability)
+        }
+        if not abilities_dist:
+            return None
+
+        moves_dist = entry.get("Moves", {})
+        if not moves_dist:
+            return None
+        sampled_moves = self._sample_moves_with_revealed(
+            moves_dist=moves_dist, revealed=belief.revealed_moves, rng=rng,
+        )
+        if sampled_moves is None:
+            return None
+
+        spread_key = _weighted_pick(entry.get("Spreads", {}), rng)
+        if spread_key:
+            nature, evs = _parse_spread(spread_key)
+        else:
+            nature = "Serious"
+            evs = {k: 0 for k in ("hp", "atk", "def", "spa", "spd", "spe")}
+        tera = _weighted_pick(entry.get("Tera Types", {}), rng) or ""
+
+        return ModalSet(
+            species=_normalize(species),
+            level=100,
+            types=[],
+            moves=sampled_moves,
+            item=_normalize(_weighted_pick(items_dist, rng) or "none"),
+            ability=_normalize(_weighted_pick(abilities_dist, rng) or "none"),
+            nature=nature,
+            evs=evs,
+            ivs={k: 31 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            stats={k: 100 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
+            tera_type=tera,
+            weight_kg=0.0,
+        )
+
+    def _sample_moves_with_revealed(
+        self,
+        moves_dist: dict[str, float],
+        revealed: set[str],
+        rng: random.Random,
+    ) -> list[str] | None:
+        """Sample 4 distinct moves weighted by chaos usage, with the
+        constraint that all moves in `revealed` MUST be in the result.
+        Returns None if any revealed move is missing from `moves_dist`.
+
+        Returned move ids are normalized.
+        """
+        # Map normalized → (display_key, weight)
+        norm_to_key: dict[str, tuple[str, float]] = {}
+        for key, weight in moves_dist.items():
+            norm_to_key[_normalize(key)] = (key, float(weight))
+
+        # Verify revealed moves exist
+        kept: list[str] = []
+        for rev in revealed:
+            if rev not in norm_to_key:
+                return None
+            kept.append(rev)
+            if len(kept) >= 4:
+                break
+
+        # Build a normalized weight pool, exclude already-kept
+        remaining_pool = {
+            norm: w for norm, (_key, w) in norm_to_key.items()
+            if norm not in kept
+        }
+        # Weighted-random fill of the remaining slots without replacement
+        slots_left = 4 - len(kept)
+        if slots_left > 0:
+            extra = _weighted_pick_n_distinct(remaining_pool, slots_left, rng)
+            kept.extend(extra)
+
+        return kept[:4]
 
     def sample_k_sets(
         self,
