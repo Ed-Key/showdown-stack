@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from showdown_copilot.belief import OpponentBelief
+from showdown_copilot.belief import BeliefTracker, OpponentBelief
 from showdown_copilot.priors import (
     PriorsSource,
     _weighted_pick,
@@ -318,3 +318,61 @@ def test_sample_set_with_belief_falls_back_when_filter_empty(tmp_path):
     assert out.item in {"rockyhelmet", "lifeorb"}
     assert out.ability == "roughskin"
     assert "jankyunknown" not in out.moves
+
+
+def test_get_set_revealed_ability_overrides_R5_impossible_abilities(tmp_path):
+    """REGRESSION (Plan H Task 4 review): contract test that proves the
+    priors filter prefers `revealed_ability` over `impossible_abilities`.
+
+    The R5 rule (Task 4) eagerly adds Intimidate to `impossible_abilities`
+    on every opp switch-in. If the protocol then fires the `-ability:
+    Intimidate` event (i.e., Intimidate WAS in fact present), revealed_ability
+    is set positively. The priors filter must select chaos sets matching
+    the revealed ability — not exclude them based on the now-stale
+    impossible_abilities entry.
+
+    This test pins the contract that `BeliefTracker.eagerly_rule_out_*`
+    relies on: a positive reveal SUPERSEDES any prior false impossibility.
+    Without this, R5 would actively HARM modal selection in cases where
+    its inference was disproved.
+    """
+    data = {
+        "data": {
+            "Landorus-Therian": {
+                "Moves": {"earthquake": 80, "uturn": 70, "stoneedge": 50},
+                "Items": {"rockyhelmet": 50, "leftovers": 30},
+                # Two abilities — Intimidate is what we'll reveal positively
+                # despite R5 putting it in impossible_abilities.
+                "Abilities": {"intimidate": 70, "sandforce": 30},
+                "Spreads": {"Jolly:0/252/0/0/4/252": 80},
+                "Tera Types": {"Steel": 50},
+            }
+        }
+    }
+    fake = tmp_path / "gen9ou-1500.json"
+    fake.write_text(json.dumps(data))
+    src = PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+
+    # Drive R5 through the real BeliefTracker: switch-in adds intimidate
+    # (and 6 other auto-trigger abilities) to impossible_abilities.
+    tracker = BeliefTracker()
+    tracker.on_switch_in("Landorus-Therian")
+    belief_after_r5 = tracker.get("Landorus-Therian")
+    assert "intimidate" in belief_after_r5.impossible_abilities
+
+    # Now the protocol fires `-ability: Intimidate` — Intimidate WAS in
+    # fact present despite R5's eager rule-out. revealed_ability is set.
+    tracker.on_reveal_ability("Landorus-Therian", "Intimidate")
+    belief = tracker.get("Landorus-Therian")
+    assert belief.revealed_ability == "intimidate"
+    assert "intimidate" in belief.impossible_abilities  # R5 entry persists
+
+    # The priors filter consults revealed_ability FIRST. Despite intimidate
+    # being in impossible_abilities, the modal must select intimidate
+    # (because it's the asserted truth).
+    out = src.get_set("Landorus-Therian", format="gen9ou", belief=belief)
+    assert out.ability == "intimidate", (
+        "priors filter must prefer revealed_ability over impossible_abilities — "
+        "without this, R5's eager rule-out would harm modal selection on every "
+        "Pokemon whose ability gets revealed"
+    )

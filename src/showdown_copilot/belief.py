@@ -242,7 +242,7 @@ class BeliefTracker:
 
         Resets per-Pokemon switch-in state and records active hazards on
         the opp side. R4 reads `side_hazards_at_switch_in` at end-of-turn;
-        R5 fires inline here via `eagerly_rule_out_auto_trigger_abilities`.
+        R5 fires inline here via `_eagerly_rule_out_auto_trigger_abilities`.
 
         Args:
             species: opp Pokemon switching in (display or normalized form).
@@ -265,14 +265,14 @@ class BeliefTracker:
         b.moves_used_since_switch_in = []
         b.last_used_move = None
         # R5: eager rule-out of auto-trigger abilities (constant-size loop)
-        self.eagerly_rule_out_auto_trigger_abilities(
+        self._eagerly_rule_out_auto_trigger_abilities(
             species=species,
             current_weather=current_weather,
             generation=generation,
             our_active_ability=our_active_ability,
         )
 
-    def eagerly_rule_out_auto_trigger_abilities(
+    def _eagerly_rule_out_auto_trigger_abilities(
         self,
         species: str,
         current_weather: str | None,
