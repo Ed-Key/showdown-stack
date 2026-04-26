@@ -460,3 +460,110 @@ def test_SHEERFORCE_OR_MAGICGUARD_SPECIES_pool_membership():
         "have SF or MG — these would cause R3 to silently miss inferences:\n  "
         + "\n  ".join(failures)
     )
+
+
+# ---------- R1 (Task 7): two-different-moves disproves Choice + early-disprove ----
+
+
+def test_R1_two_different_moves_disproves_choice():
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move("Garchomp", "Earthquake",
+              split_msg=["|move|", "p2a: Garchomp", "Earthquake"])
+    t.on_move("Garchomp", "Stone Edge",
+              split_msg=["|move|", "p2a: Garchomp", "Stone Edge"])
+    b = t.get("Garchomp")
+    assert "choiceband" in b.impossible_items
+    assert "choicescarf" in b.impossible_items
+    assert "choicespecs" in b.impossible_items
+
+
+def test_R1_no_disproof_on_same_move_twice():
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move("Garchomp", "Earthquake",
+              split_msg=["|move|", "p2a: Garchomp", "Earthquake"])
+    t.on_move("Garchomp", "Earthquake",
+              split_msg=["|move|", "p2a: Garchomp", "Earthquake"])
+    b = t.get("Garchomp")
+    # No Choice items in impossible_items from R1 (R3 may have added LO,
+    # which is a different rule)
+    assert "choiceband" not in b.impossible_items
+
+
+def test_R1_no_disproof_after_switch():
+    """Move history resets on switch-in; second move treated as 'first
+    after switch' so R1 doesn't fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move("Garchomp", "Earthquake",
+              split_msg=["|move|", "p2a: Garchomp", "Earthquake"])
+    t.on_switch_out("Garchomp")
+    t.on_switch_in("Garchomp")  # comes back
+    t.on_move("Garchomp", "Stone Edge",
+              split_msg=["|move|", "p2a: Garchomp", "Stone Edge"])
+    b = t.get("Garchomp")
+    assert "choiceband" not in b.impossible_items
+
+
+def test_R1_trick_resets_move_history():
+    """REGRESSION: opp gets Tricked into Choice Band, then uses 2 different
+    moves. Naive R1 would say 'no Choice item' — exactly wrong. The
+    on_item_swapped hook resets last_used_move so the post-Trick moves
+    don't fire R1."""
+    t = BeliefTracker()
+    t.on_switch_in("Mew")
+    t.on_move("Mew", "Earthquake",
+              split_msg=["|move|", "p2a: Mew", "Earthquake"])
+    # Trick: Mew gets Choice Band, was holding Lagging Tail
+    t.on_item_swapped("Mew", new_item="Choice Band", old_item="Lagging Tail")
+    # Post-Trick moves — R1 must NOT fire (Mew genuinely now has CB)
+    t.on_move("Mew", "Stone Edge",
+              split_msg=["|move|", "p2a: Mew", "Stone Edge"])
+    b = t.get("Mew")
+    assert b.revealed_item == "choiceband"
+    # No Choice items in impossible_items from the Trick path. Note:
+    # R1's pre-Trick move (Earthquake) also can't trigger R1 because
+    # there was no prior move; and on_item_swapped reset last_used_move.
+    assert "choiceband" not in b.impossible_items
+
+
+def test_R1_sleep_talk_does_not_trigger_disproof():
+    """REGRESSION (Sleep Talk poison): Choice-Specs Lapras Sleep-Talks
+    HydroPump on turn 1, wakes and uses IceBeam on turn 2. Naive R1
+    reads as 'two different moves' but the first was Sleep-Talk-driven."""
+    t = BeliefTracker()
+    t.on_switch_in("Lapras")
+    t.on_move("Lapras", "Hydro Pump",
+              split_msg=["|move|", "p2a: Lapras", "Hydro Pump", "[from]Sleep Talk"])
+    t.on_move("Lapras", "Ice Beam",
+              split_msg=["|move|", "p2a: Lapras", "Ice Beam"])
+    b = t.get("Lapras")
+    # Hydro Pump was passive — wasn't recorded as last_used_move.
+    # Ice Beam is now the FIRST recorded move; R1 doesn't fire.
+    assert "choiceband" not in b.impossible_items
+    assert b.last_used_move == "icebeam"
+
+
+def test_R1_early_disprove_swordsdance():
+    """Early-disprove free win: Swords Dance is impossible under Choice
+    lock (you can't use a status move while locked to a damaging move).
+    First-and-only observation rules out Choice."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp")
+    t.on_move("Garchomp", "Swords Dance",
+              split_msg=["|move|", "p2a: Garchomp", "Swords Dance"])
+    b = t.get("Garchomp")
+    assert "choiceband" in b.impossible_items
+    assert "choicescarf" in b.impossible_items
+    assert "choicespecs" in b.impossible_items
+
+
+def test_R1_early_disprove_substitute():
+    """Substitute is also Choice-impossible."""
+    t = BeliefTracker()
+    t.on_switch_in("Kingambit")
+    t.on_move("Kingambit", "Substitute",
+              split_msg=["|move|", "p2a: Kingambit", "Substitute"])
+    b = t.get("Kingambit")
+    assert "choiceband" in b.impossible_items

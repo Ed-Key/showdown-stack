@@ -223,6 +223,40 @@ _SHEERFORCE_OR_MAGICGUARD_SPECIES: frozenset[str] = frozenset({
 })
 
 
+# R1: Choice items lock the holder into the first-used move until switch-out.
+# Two-different-moves observed without an intervening switch (or item swap)
+# disproves the entire Choice trio.
+_CHOICE_ITEMS: frozenset[str] = frozenset({
+    "choiceband", "choicescarf", "choicespecs",
+})
+
+# Moves that are categorically incompatible with Choice items: status
+# setups, recovery, Substitute, protection moves, Leech Seed. If an opp
+# uses any of these even once, Choice items are immediately ruled out
+# (the move would have failed under Choice lock — once locked to the
+# damaging first move you can't use a status move without switching).
+#
+# Conservative — only categorically-Choice-impossible moves. Knock Off,
+# U-turn, Volt Switch, Flip Turn are damaging and Choice-COMPATIBLE
+# (Choice users routinely run U-turn for momentum), so they're NOT here.
+_CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = frozenset({
+    # Setup boosting moves
+    "swordsdance", "nastyplot", "calmmind", "bulkup", "irondefense",
+    "shellsmash", "dragondance", "quiverdance", "tailglow",
+    "agility", "rockpolish", "autotomize",
+    "amnesia", "barrier", "cosmicpower", "stockpile",
+    "victorydance", "noretreat",
+    # Recovery
+    "roost", "recover", "softboiled", "synthesis", "moonlight",
+    "morningsun", "milkdrink", "wish", "slackoff", "shoreup",
+    "rest", "healorder", "lifedew",
+    # Other categorically Choice-impossible
+    "substitute", "protect", "detect", "spikyshield", "kingsshield",
+    "obstruct", "banefulbunker", "burningbulwark", "silktrap",
+    "leechseed",
+})
+
+
 # ---------- BeliefTracker ----------
 
 
@@ -289,19 +323,21 @@ class BeliefTracker:
         so the `[from]` guard runs. `on_reveal_move` is an internal state
         recorder used by `on_move` and the harness fallback path.
 
-        Task 7 will extend this method with R1 logic. R2 (Task 5): if the
-        opp uses a status-category move, Assault Vest is ruled out (AV
-        blocks status moves entirely). R3 (this task): if the opp uses
-        any damaging move and the species is NOT in the SF/MG ability
-        pool, Life Orb is ruled out — LO recoil announces itself in the
-        protocol, so absence of recoil on a damaging move from a
+        R1 (Task 7): Choice items lock the holder to one move; using two
+        different moves on the same active stretch (no switch, no item swap)
+        disproves Choice Band / Scarf / Specs. Additionally, certain moves
+        (status setups, recovery, Substitute, protection, Leech Seed) are
+        categorically Choice-impossible and disprove on the FIRST observation.
+        R2 (Task 5): if the opp uses a status-category move, Assault Vest
+        is ruled out (AV blocks status moves entirely). R3 (Task 6): if
+        the opp uses any damaging move and the species is NOT in the SF/MG
+        ability pool, Life Orb is ruled out — LO recoil announces itself
+        in the protocol, so absence of recoil on a damaging move from a
         non-SF/MG candidate is free evidence that LO is impossible.
 
-        ORDER NOTE for Task 7: R1 (two-different-moves Choice disproof)
-        must fire BEFORE the `on_reveal_move` call — R1 needs to compare
-        the new move against the PREVIOUS `last_used_move`, which
-        `on_reveal_move` overwrites. R3 fires AFTER state recording,
-        alongside R2. Final order:
+        ORDER: R1 fires BEFORE `on_reveal_move` — it compares the new move
+        against the PREVIOUS `last_used_move`, which `on_reveal_move`
+        overwrites. R2 / R3 fire AFTER state recording. Final order:
             [from] guard → R1 → on_reveal_move → R2 → R3
         """
         # Defensive: callers should pass a list, but Task 9 harness wiring
@@ -311,11 +347,34 @@ class BeliefTracker:
             split_msg = []
         if is_passive_move_event(split_msg):
             return  # Passive — don't update revealed_moves or fire rules
-        # Pass through to skeleton state recording (revealed_moves, last_used)
-        self.on_reveal_move(species, move_id)
+
         b = self.get(species)
         norm_move = _normalize(move_id)
         norm_species = _normalize(species)
+
+        # Empty-move guard. _normalize("") returns ""; without this guard
+        # the two-different-moves R1 branch could fire spuriously when
+        # last_used_move is set to a real move and the new (empty) move
+        # compares unequal. on_reveal_move also early-returns on empty.
+        if not norm_move:
+            return
+
+        # R1 (early-disprove): certain moves are categorically Choice-
+        # impossible. Fires on the FIRST observation, no history needed.
+        if norm_move in _CHOICE_INCOMPATIBLE_MOVES:
+            b.impossible_items.update(_CHOICE_ITEMS)
+
+        # R1 (two-different-moves): if opp used a different move last,
+        # without switching since (last_used_move is None after switch-in
+        # or after on_item_swapped), Choice items are impossible.
+        if (
+            b.last_used_move is not None
+            and norm_move != b.last_used_move
+        ):
+            b.impossible_items.update(_CHOICE_ITEMS)
+
+        # State recording (existing skeleton path)
+        self.on_reveal_move(species, move_id)
 
         # R2: Assault Vest blocks status moves; if a status move was used,
         # AV is ruled out. Status moves don't trigger R3 (LO doesn't
