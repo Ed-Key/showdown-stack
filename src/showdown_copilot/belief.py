@@ -13,6 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from showdown_copilot._ability_pools import (
+    _LEVITATE_SPECIES,
+    _MAGICGUARD_SPECIES,
+)
+
 
 def _normalize(name: str) -> str:
     """Match the same normalization the rest of the codebase uses."""
@@ -253,6 +258,36 @@ _CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = _STATUS_MOVES - frozenset({
 })
 
 
+# ---------- R4 (Task 8): Heavy-Duty Boots from hazard immunity ----------
+
+# Smogon Pokedex base-types lookup (Phase 1 simplified to species
+# relevant for hazard-immunity testing; Phase 2 should plug in
+# poke-env's full pokedex for completeness across the entire dex).
+# Used by R4's Tera-aware type carve-outs via has_type().
+_BASE_TYPES: dict[str, tuple[str, ...]] = {
+    "garchomp": ("Dragon", "Ground"),
+    "skarmory": ("Steel", "Flying"),
+    "rotomwash": ("Electric", "Water"),
+    "sigilyph": ("Psychic", "Flying"),
+    "ferrothorn": ("Grass", "Steel"),
+    "toxapex": ("Poison", "Water"),
+    "landorustherian": ("Ground", "Flying"),
+    "corviknight": ("Flying", "Steel"),
+    # Add as Phase-1 tests demand
+}
+
+# Items ruled out when R4 fires (= every other plausible item becomes
+# impossible because only HDB explains the absence of hazard damage in
+# the carve-out-failed branch). HDB itself is excluded — it's the
+# inferred conclusion, not a rule-out.
+_R4_RULED_OUT_ITEMS: frozenset[str] = frozenset({
+    "lifeorb", "leftovers", "rockyhelmet",
+    "choiceband", "choicescarf", "choicespecs",
+    "assaultvest", "focussash",
+    "weaknesspolicy", "ejectbutton", "redcard",
+})
+
+
 # ---------- BeliefTracker ----------
 
 
@@ -466,6 +501,12 @@ class BeliefTracker:
         # Move-history is per-stretch-on-field; reset on switch in
         b.moves_used_since_switch_in = []
         b.last_used_move = None
+        # Free wins: these items announce themselves on switch-in via
+        # explicit protocol messages (Air Balloon "popped" on hazard hit;
+        # Booster Energy's "Booster Energy activated!" on entry). Their
+        # absence rules them out unconditionally — no carve-outs needed.
+        b.impossible_items.add("airballoon")
+        b.impossible_items.add("boosterenergy")
         # R5: eager rule-out of auto-trigger abilities (constant-size loop)
         self._eagerly_rule_out_auto_trigger_abilities(
             species=species,
@@ -542,10 +583,80 @@ class BeliefTracker:
         switch event BEFORE the hazard-damage event in the same buffer
         flush — we can't conclude inline on the switch event.
 
-        Phase-1 skeleton: just consume `just_switched_in` and
-        `took_hazard_damage_this_stretch` flags. Task 8 (R4) implements
-        the actual conclusion logic.
+        Order is significant: R4 must fire BEFORE the per-Pokemon flags
+        are cleared, since `_fire_r4` reads them.
         """
         for b in self._beliefs.values():
+            if (
+                b.just_switched_in
+                and b.side_hazards_at_switch_in
+                and not b.took_hazard_damage_this_stretch
+            ):
+                self._fire_r4(b)
             b.just_switched_in = False
             b.took_hazard_damage_this_stretch = False
+
+    def _fire_r4(self, b: OpponentBelief) -> None:
+        """R4 — Heavy-Duty Boots inference. Called from `on_turn_boundary`
+        when the Pokemon just switched in this turn, hazards were active
+        on its side at switch-in, and no hazard damage was observed by
+        end-of-turn.
+
+        Carve-outs (return without ruling out — leave items still possible):
+
+        - Species ability pool includes Magic Guard → Magic Guard makes
+          the Pokemon immune to ALL indirect damage, so absence of hazard
+          damage is uninformative.
+
+        For type-based carve-outs (only relevant when at least one of
+        Spikes / T-Spikes is active — SR is rock-typed and hits Flying
+        and Levitate alike):
+
+        - Tera Flying / base Flying-typed → ignores Spikes / T-Spikes
+          entirely (grounded check fails post-Tera-Flying).
+        - Levitate-pool species → ignores ground-based hazards (Spikes /
+          T-Spikes), so absence is unconditionally consistent with
+          Levitate. (SR still hits Levitate, so SR-only hazards bypass
+          this carve-out.)
+        - Tera Steel / base Steel-typed + T-Spikes only → Steel is
+          immune to T-Spikes, so absence is consistent with Steel typing
+          rather than HDB.
+
+        If none of the carve-outs apply, conclude HDB by adding every
+        other plausible item to `impossible_items`.
+        """
+        norm_species = b.species  # already normalized via BeliefTracker.get
+        active_hazards = set(b.side_hazards_at_switch_in.keys())
+
+        # Magic Guard makes ALL hazard absence uninformative — short-circuit.
+        if norm_species in _MAGICGUARD_SPECIES:
+            return
+
+        # Filter to damaging hazards (Phase 1 scope: SR / Spikes / T-Spikes;
+        # Sticky Web inflicts no damage so it's outside R4's purview).
+        damaging_hazards = active_hazards & {"stealthrock", "spikes", "toxicspikes"}
+        if not damaging_hazards:
+            return
+
+        non_sr_hazards = damaging_hazards - {"stealthrock"}
+
+        # Tera-aware type checks (consult has_type once each).
+        base_types = _BASE_TYPES.get(norm_species, ())
+        is_flying = has_type(b, "Flying", base_types)
+        is_steel = has_type(b, "Steel", base_types)
+
+        if non_sr_hazards:
+            # Tera Flying ignores Spikes / T-Spikes entirely.
+            if is_flying:
+                return
+            # Levitate-pool species ignore Spikes / T-Spikes.
+            if norm_species in _LEVITATE_SPECIES:
+                return
+            # If only T-Spikes is the non-SR damaging hazard, Steel typing
+            # explains the absence (Steel is immune to T-Spikes; SR-only
+            # branch already handled above when non_sr_hazards is empty).
+            if non_sr_hazards == {"toxicspikes"} and is_steel:
+                return
+
+        # All carve-outs failed → HDB is the only consistent item.
+        b.impossible_items.update(_R4_RULED_OUT_ITEMS)

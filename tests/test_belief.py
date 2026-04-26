@@ -666,3 +666,161 @@ def test_CHOICE_INCOMPATIBLE_MOVES_subset_of_STATUS_MOVES():
     assert "switcheroo" not in _CHOICE_INCOMPATIBLE_MOVES
     assert "trick" in _STATUS_MOVES
     assert "switcheroo" in _STATUS_MOVES
+
+
+# ---------- R4 (Task 8): Heavy-Duty Boots from hazard immunity ----------
+
+
+def test_R4_heavy_duty_boots_from_stealth_rock_immunity():
+    """Skarmory (no Levitate, no Magic Guard) switches in to active SR
+    with no hazard damage observed by turn boundary → HDB inferred."""
+    t = BeliefTracker()
+    t.on_switch_in("Skarmory", side_hazards={"stealthrock": 1})
+    # No on_hazard_damage call → flag stays False
+    t.on_turn_boundary()
+    b = t.get("Skarmory")
+    assert "leftovers" in b.impossible_items
+    assert "rockyhelmet" in b.impossible_items
+    assert "choiceband" in b.impossible_items
+    # And HDB is NOT in impossible_items (it's the conclusion)
+    assert "heavydutyboots" not in b.impossible_items
+
+
+def test_R4_no_fire_when_hazard_damage_observed():
+    """Skarmory takes SR damage on switch-in (would happen normally
+    without HDB) → R4 doesn't fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Skarmory", side_hazards={"stealthrock": 1})
+    t.on_hazard_damage("Skarmory")  # sets took_hazard_damage_this_stretch
+    t.on_turn_boundary()
+    b = t.get("Skarmory")
+    # Free-win additions still fire (boosterenergy, airballoon)
+    assert "airballoon" in b.impossible_items
+    assert "boosterenergy" in b.impossible_items
+    # But R4-specific items NOT in impossible_items
+    assert "leftovers" not in b.impossible_items
+    assert "choiceband" not in b.impossible_items
+
+
+def test_R4_no_hdb_for_levitate_candidate_with_spikes():
+    """Rotom-Wash (Levitate possible) switches in to active Spikes →
+    Levitate could explain absence of damage. R4 doesn't fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Rotom-Wash", side_hazards={"spikes": 1})
+    t.on_turn_boundary()
+    b = t.get("Rotom-Wash")
+    assert "leftovers" not in b.impossible_items
+
+
+def test_R4_no_hdb_for_magicguard_candidate():
+    """Sigilyph (Magic Guard possible) switches in to SR + Spikes →
+    Magic Guard explains absence of all hazard damage. R4 doesn't fire."""
+    t = BeliefTracker()
+    t.on_switch_in("Sigilyph", side_hazards={"stealthrock": 1, "spikes": 2})
+    t.on_turn_boundary()
+    b = t.get("Sigilyph")
+    assert "leftovers" not in b.impossible_items
+
+
+def test_R4_tera_flying_carve_out_for_spikes():
+    """Garchomp Tera Flying switches in to active Spikes → Tera Flying
+    ignores Spikes; R4 doesn't fire even though Garchomp doesn't have
+    Levitate."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp", side_hazards={"spikes": 1})
+    t.on_terastallize("Garchomp", "Flying")
+    t.on_turn_boundary()
+    b = t.get("Garchomp")
+    assert "leftovers" not in b.impossible_items
+
+
+def test_R4_no_fire_without_active_hazards():
+    """No hazards → R4 doesn't fire (no inference possible)."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp", side_hazards={})
+    t.on_turn_boundary()
+    b = t.get("Garchomp")
+    # Free wins still fire
+    assert "airballoon" in b.impossible_items
+    # R4-specific items not added
+    assert "leftovers" not in b.impossible_items
+
+
+def test_R4_free_wins_always_fire_on_switch_in():
+    """boosterenergy and airballoon are ruled out on EVERY switch-in
+    (they announce themselves; absence rules them out unconditionally)."""
+    t = BeliefTracker()
+    t.on_switch_in("Garchomp", side_hazards={})
+    b = t.get("Garchomp")
+    assert "airballoon" in b.impossible_items
+    assert "boosterenergy" in b.impossible_items
+
+
+def test_LEVITATE_SPECIES_pool_membership():
+    """REGRESSION (mirror of Task 6 sanity test): every species in
+    `_LEVITATE_SPECIES` must ACTUALLY have Levitate in its gen 9 ability
+    pool per poke-env's authoritative pokedex.
+
+    Without this guard, a stale chaos-cache entry (e.g., gen-9 Gengar
+    which lost Levitate in gen 7) would cause R4 to silently fail to
+    rule out HDB on switch-ins where it should — a false-negative on a
+    rule with thousands of firings per battle.
+    """
+    from poke_env.data import GenData
+
+    from showdown_copilot._ability_pools import _LEVITATE_SPECIES
+    from showdown_copilot.belief import _normalize
+
+    pokedex = GenData.from_gen(9).pokedex
+    failures = []
+    for species_id in _LEVITATE_SPECIES:
+        if species_id not in pokedex:
+            failures.append(f"{species_id!r}: not in poke-env gen9 pokedex")
+            continue
+        abilities = pokedex[species_id].get("abilities", {})
+        normalized = {_normalize(name) for name in abilities.values()}
+        if "levitate" not in normalized:
+            failures.append(
+                f"{species_id!r}: ability pool {sorted(normalized)} does not contain Levitate"
+            )
+
+    assert not failures, (
+        "Some species in _LEVITATE_SPECIES don't actually have Levitate "
+        "in gen 9 — these would cause R4 to mis-fire HDB inference:\n  "
+        + "\n  ".join(failures)
+    )
+
+
+def test_MAGICGUARD_SPECIES_pool_membership():
+    """REGRESSION (mirror of Task 6 sanity test): every species in
+    `_MAGICGUARD_SPECIES` must ACTUALLY have Magic Guard in its gen 9
+    ability pool per poke-env's authoritative pokedex.
+
+    Magic Guard is the most-impactful R4 carve-out (immune to ALL
+    indirect damage), so a stale entry would cause R4 to falsely conclude
+    HDB on a Magic Guard candidate that took no hazard damage simply
+    because of MG.
+    """
+    from poke_env.data import GenData
+
+    from showdown_copilot._ability_pools import _MAGICGUARD_SPECIES
+    from showdown_copilot.belief import _normalize
+
+    pokedex = GenData.from_gen(9).pokedex
+    failures = []
+    for species_id in _MAGICGUARD_SPECIES:
+        if species_id not in pokedex:
+            failures.append(f"{species_id!r}: not in poke-env gen9 pokedex")
+            continue
+        abilities = pokedex[species_id].get("abilities", {})
+        normalized = {_normalize(name) for name in abilities.values()}
+        if "magicguard" not in normalized:
+            failures.append(
+                f"{species_id!r}: ability pool {sorted(normalized)} does not contain Magic Guard"
+            )
+
+    assert not failures, (
+        "Some species in _MAGICGUARD_SPECIES don't actually have Magic Guard "
+        "in gen 9 — these would cause R4 to mis-fire HDB inference:\n  "
+        + "\n  ".join(failures)
+    )
