@@ -14,8 +14,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from showdown_copilot._ability_pools import (
+    _CHLOROPHYLL_SPECIES,
     _LEVITATE_SPECIES,
     _MAGICGUARD_SPECIES,
+    _PROTOSYNTHESIS_SPECIES,
+    _QUARKDRIVE_SPECIES,
+    _QUICKFEET_SPECIES,
+    _SANDRUSH_SPECIES,
+    _SLUSHRUSH_SPECIES,
+    _SURGESURFER_SPECIES,
+    _SWIFTSWIM_SPECIES,
+    _UNBURDEN_SPECIES,
+)
+from showdown_copilot.stats import (
+    _NATURE_TO_SPE_MULT,
+    apply_bot_speed_modifier_chain,
+    compute_speed_stat,
 )
 
 
@@ -109,6 +123,26 @@ class OpponentBelief:
     just_switched_in: bool = False
     side_hazards_at_switch_in: dict[str, int] = field(default_factory=dict)
     took_hazard_damage_this_stretch: bool = False
+
+    # ----- Speed inference (Phase 2) -----
+    # Final Speed-stat range at level 100. None = "not narrowed yet" (priors
+    # filter falls through to all spreads). Inclusive bounds. Updated by
+    # BeliefTracker.on_turn_boundary_speed; reset by on_item_swapped.
+    speed_range: tuple[int, int] | None = None
+
+    # True iff bracket math forces the Choice Scarf hypothesis. When set,
+    # the priors filter forces item == "choicescarf" (subject to existing
+    # impossible_items rule-outs). Cleared on rollback when contradicting
+    # evidence (R1 firing in on_move, positive item reveal of non-scarf
+    # Choice item, item swap) lands.
+    item_inferred_choicescarf: bool = False
+
+    # Audit history of every (turn, my_active_speed_post_modifiers, kind)
+    # observation. kind ∈ {"opp_first", "us_first", "skipped:cant", ...}.
+    # Used for: (a) replay-test asserting expected narrowings,
+    # (b) rollback — when scarf is disproved we recompute speed_range
+    # from the non-scarf branch of every observation.
+    speed_observations: list[tuple[int, int, str]] = field(default_factory=list)
 
 
 # ---------- Module-level helpers ----------
@@ -310,6 +344,88 @@ def _build_base_speeds_table() -> dict[str, int]:
 
 _BASE_SPEEDS: dict[str, int] = _build_base_speeds_table()
 
+
+# Sentinel for "no upper bound on opp speed". Used both in the active
+# narrowing algorithm (when only the lower bound has been narrowed) and
+# in the rollback-replay path. Picked at 9999 because no real Pokemon
+# has Speed > 1500 even with maximum buffs.
+_SPEED_HI_SENTINEL: int = 9999
+
+# Choice items minus scarf — used by on_reveal_item rollback path to
+# detect "we inferred scarf, but Showdown just told us it's actually
+# Band/Specs". When that mismatch lands, _recompute_speed_range_no_scarf
+# replays observations under non-scarf assumption.
+_NON_SCARF_CHOICE: frozenset[str] = frozenset({"choiceband", "choicespecs"})
+
+
+def can_have_speed_modified(
+    belief: "OpponentBelief",
+    weather: str | None,
+    terrain: str | None,
+) -> bool:
+    """True iff the opp's species could have an unobserved speed-boosting
+    condition. Speed inference must SKIP the turn when this returns True.
+
+    Mirrors foul-play's `can_have_speed_modified` (paraphrased — see
+    `analysis/plan-h-phase2-research/foul-play-speed.md` Part A.6) but
+    EXTENDED with a Booster Energy / Quark Drive gate to fix the bug
+    flagged in research D.4 (foul-play silently mis-narrows when opp's
+    species could have protosynthesisspe but the volatile hasn't fired
+    yet).
+
+    Args:
+      belief: the opp's OpponentBelief (we read revealed_ability +
+        removed_item to short-circuit on known abilities).
+      weather: normalized Showdown weather string ("RainDance",
+        "SunnyDay", "Sandstorm", "Hail", "Snow") or None.
+      terrain: normalized terrain string ("ELECTRIC_TERRAIN", etc.) or None.
+
+    Returns True if speed inference is unsafe this turn.
+    """
+    species = belief.species
+    if belief.revealed_ability is not None:
+        return False  # ability known, no hidden boost possible
+
+    # 1. Unburden post-item-loss
+    if belief.removed_item is not None and species in _UNBURDEN_SPECIES:
+        return True
+
+    # 2. Weather-conditional ability speedups
+    if weather == "RainDance" and species in _SWIFTSWIM_SPECIES:
+        return True
+    if weather == "SunnyDay" and species in _CHLOROPHYLL_SPECIES:
+        return True
+    if weather == "Sandstorm" and species in _SANDRUSH_SPECIES:
+        return True
+    if weather in ("Hail", "Snow") and species in _SLUSHRUSH_SPECIES:
+        return True
+
+    # 3. Electric Terrain Surge Surfer
+    if terrain == "ELECTRIC_TERRAIN" and species in _SURGESURFER_SPECIES:
+        return True
+
+    # 4. Quick Feet on paralysis (Status.PAR equivalent)
+    # Note: we don't track opp's status directly; assume worst-case "could
+    # be paralyzed" only when we have an active belief flag. For now
+    # check species-pool gate only — if species could have Quick Feet
+    # AND any non-empty status was observed, skip. Conservative: skip
+    # whenever Quick Feet is in the pool (status flag added later if
+    # we add per-belief status tracking).
+    if species in _QUICKFEET_SPECIES:
+        return True
+
+    # 5. PHASE 2 ADDITION: Booster Energy / Protosynthesis-Speed (gen 9)
+    # Foul-play's bug: doesn't gate on this. Plan H fixes.
+    if (
+        weather == "SunnyDay"
+        or terrain == "ELECTRIC_TERRAIN"
+        or belief.removed_item == "boosterenergy"
+    ):
+        if species in _PROTOSYNTHESIS_SPECIES or species in _QUARKDRIVE_SPECIES:
+            return True
+
+    return False
+
 # Items ruled out when R4 fires (= every other plausible item becomes
 # impossible because only HDB explains the absence of hazard damage in
 # the carve-out-failed branch). HDB itself is excluded — it's the
@@ -428,6 +544,10 @@ class BeliefTracker:
         # impossible. Fires on the FIRST observation, no history needed.
         if norm_move in _CHOICE_INCOMPATIBLE_MOVES:
             b.impossible_items.update(_CHOICE_ITEMS)
+            # Phase 2: scarf rollback — R1 disproves the entire Choice
+            # family, so an inferred-scarf hypothesis must be retracted.
+            if b.item_inferred_choicescarf:
+                self._recompute_speed_range_no_scarf(species)
 
         # R1 (two-different-moves): if opp used a different move last,
         # without switching since (last_used_move is None after switch-in
@@ -437,6 +557,9 @@ class BeliefTracker:
             and norm_move != b.last_used_move
         ):
             b.impossible_items.update(_CHOICE_ITEMS)
+            # Phase 2: scarf rollback (same rationale as early-disprove).
+            if b.item_inferred_choicescarf:
+                self._recompute_speed_range_no_scarf(species)
 
         # State recording (existing skeleton path)
         self.on_reveal_move(species, move_id)
@@ -477,6 +600,9 @@ class BeliefTracker:
         b = self.get(species)
         b.revealed_item = norm_item
         b.impossible_items.discard(norm_item)
+        # Phase 2: scarf rollback when revealed item contradicts inferred scarf.
+        if b.item_inferred_choicescarf and norm_item in _NON_SCARF_CHOICE:
+            self._recompute_speed_range_no_scarf(species)
 
     def on_reveal_ability(self, species: str, ability_id: str) -> None:
         """Record opp's ability identity. Empty / whitespace-only
@@ -515,6 +641,11 @@ class BeliefTracker:
             b.impossible_items.discard(norm_new)
         b.last_used_move = None
         b.moves_used_since_switch_in = []
+        # Phase 2: speed bracket flips when item changes; clear all cached
+        # speed inference. Future observations will repopulate.
+        b.speed_range = None
+        b.item_inferred_choicescarf = False
+        b.speed_observations = []
 
     def on_terastallize(self, species: str, tera_type: str) -> None:
         """Called on `|-terastallize|` protocol message. Sets the Tera
@@ -717,3 +848,72 @@ class BeliefTracker:
 
         # All carve-outs failed → HDB is the only consistent item.
         b.impossible_items.update(_R4_RULED_OUT_ITEMS)
+
+    # ------------------------------------------------------------------
+    # Phase 2 — Speed inference (R6 in our numbering, mirrors foul-play's
+    # check_speed_ranges). See spec at
+    # docs/superpowers/specs/2026-04-29-plan-h-phase2-speed-range-design.md
+    # ------------------------------------------------------------------
+
+    def infer_choicescarf(self, species: str) -> None:
+        """Promote ``item_inferred_choicescarf=True``. Adds non-scarf
+        Choice items to ``impossible_items`` (the Choice trio is mutex —
+        you can only hold one). Idempotent.
+
+        Called by:
+        - ``on_turn_boundary_speed`` when bracket math forces it
+          (``speed_range[0] > max_non_scarf``).
+        - External code that has independent evidence (chaos prior shape,
+          live-protocol signal).
+        """
+        b = self.get(species)
+        if not b.item_inferred_choicescarf:
+            b.item_inferred_choicescarf = True
+            b.impossible_items.add("choiceband")
+            b.impossible_items.add("choicespecs")
+
+    def _recompute_speed_range_no_scarf(self, species: str) -> None:
+        """Rollback helper. Recompute ``speed_range`` under non-scarf
+        assumption by replaying ``speed_observations``.
+
+        Called when contradicting evidence lands (Section 5.2.5 of spec):
+        - ``on_reveal_item`` with non-scarf Choice item
+        - ``on_item_swapped`` (Trick / Switcheroo / Knock Off)
+        - ``on_move`` R1 branch (two-different-moves OR early-disprove)
+
+        CRITICAL guard at end: if the replay produces a degenerate range
+        (min > max), drop to None. This happens when a prior opp_first
+        observation only made sense under scarf — replaying under
+        non-scarf assumption produces an inconsistency. Without the guard
+        the spread filter rejects every spread forever (T-C2 catches).
+        """
+        b = self.get(species)
+        b.speed_range = None
+        b.item_inferred_choicescarf = False
+
+        for _turn, my_speed, kind in b.speed_observations:
+            if kind == "opp_first":
+                new_min = my_speed + 1
+                if b.speed_range is None:
+                    b.speed_range = (new_min, _SPEED_HI_SENTINEL)
+                else:
+                    b.speed_range = (
+                        max(b.speed_range[0], new_min),
+                        b.speed_range[1],
+                    )
+            elif kind == "us_first":
+                new_max = my_speed - 1
+                if b.speed_range is None:
+                    b.speed_range = (0, new_max)
+                else:
+                    b.speed_range = (
+                        b.speed_range[0],
+                        min(b.speed_range[1], new_max),
+                    )
+            # skipped:* kinds → no contribution (they were uninformative
+            # in the original pass, still uninformative under non-scarf
+            # assumption).
+
+        # Degenerate-range guard. See docstring.
+        if b.speed_range and b.speed_range[0] > b.speed_range[1]:
+            b.speed_range = None

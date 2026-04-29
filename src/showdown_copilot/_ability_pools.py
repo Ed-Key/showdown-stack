@@ -9,3 +9,21 @@ from __future__ import annotations
 _LEVITATE_SPECIES: frozenset[str] = frozenset(['azelf', 'baltoy', 'bronzong', 'carnivine', 'chimecho', 'claydol', 'cresselia', 'cryogonal', 'duskull', 'eelektrik', 'eelektross', 'flygon', 'gastly', 'giratinaorigin', 'haunter', 'hydreigon', 'koffing', 'latias', 'latiasmega', 'latios', 'latiosmega', 'lunatone', 'mesprit', 'misdreavus', 'mismagius', 'rotom', 'rotomfan', 'rotomfrost', 'rotomheat', 'rotommow', 'rotomwash', 'solrock', 'tynamo', 'unown', 'uxie', 'vibrava', 'vikavolt', 'weezing', 'weezinggalar'])
 
 _MAGICGUARD_SPECIES: frozenset[str] = frozenset(['alakazam', 'clefable', 'clefairy', 'cleffa', 'duosion', 'kadabra', 'reuniclus', 'sigilyph', 'solosis'])
+
+_SWIFTSWIM_SPECIES: frozenset[str] = frozenset(['anorith', 'armaldo', 'barraskewda', 'basculegion', 'basculegionf', 'beartic', 'buizel', 'carracosta', 'drednaw', 'feebas', 'floatzel', 'golduck', 'gorebyss', 'horsea', 'huntail', 'kabutops', 'kingdra', 'lombre', 'lotad', 'ludicolo', 'lumineon', 'luvdisc', 'magikarp', 'mantine', 'omastar', 'overqwil', 'palpitoad', 'poliwhirl', 'poliwrath', 'psyduck', 'qwilfish', 'qwilfishhisui', 'relicanth', 'seaking', 'seismitoad', 'swampertmega'])
+
+_CHLOROPHYLL_SPECIES: frozenset[str] = frozenset(['bellossom', 'bulbasaur', 'cherubi', 'exeggutor', 'gloom', 'hoppip', 'ivysaur', 'jumpluff', 'leafeon', 'leavanny', 'lilligant', 'lilliganthisui', 'maractus', 'sawsbuck', 'scovillain', 'shiftry', 'skiploom', 'sunflora', 'sunkern', 'swadloon', 'tangela', 'tangrowth', 'tropius', 'venusaur', 'victreebel', 'vileplume', 'whimsicott'])
+
+_SANDRUSH_SPECIES: frozenset[str] = frozenset(['dracovish', 'dracozolt', 'excadrill', 'houndstone', 'lycanroc', 'sandshrew', 'sandslash', 'stoutland'])
+
+_SLUSHRUSH_SPECIES: frozenset[str] = frozenset(['arctovish', 'arctozolt', 'beartic', 'cetitan', 'sandshrewalola', 'sandslashalola'])
+
+_SURGESURFER_SPECIES: frozenset[str] = frozenset(['raichualola'])
+
+_QUICKFEET_SPECIES: frozenset[str] = frozenset(['granbull', 'jolteon', 'linoone', 'linoonegalar', 'mightyena', 'ursaring'])
+
+_UNBURDEN_SPECIES: frozenset[str] = frozenset(['accelgor', 'drifblim', 'drifloon', 'grafaiai', 'grovyle', 'hawlucha', 'hitmonlee', 'liepard', 'sceptile', 'shroodle', 'slurpuff', 'sneasler', 'swirlix', 'thievul', 'treecko'])
+
+_PROTOSYNTHESIS_SPECIES: frozenset[str] = frozenset(['brutebonnet', 'fluttermane', 'gougingfire', 'greattusk', 'ragingbolt', 'roaringmoon', 'sandyshocks', 'screamtail', 'slitherwing', 'walkingwake'])
+
+_QUARKDRIVE_SPECIES: frozenset[str] = frozenset(['ironboulder', 'ironbundle', 'ironcrown', 'ironhands', 'ironjugulis', 'ironleaves', 'ironmoth', 'ironthorns', 'irontreads', 'ironvaliant'])
