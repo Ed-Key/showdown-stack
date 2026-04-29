@@ -288,6 +288,28 @@ def _build_base_types_table() -> dict[str, tuple[str, ...]]:
 
 _BASE_TYPES: dict[str, tuple[str, ...]] = _build_base_types_table()
 
+
+# Phase 2 (speed-range narrowing): mirror of _BASE_TYPES for base Speed
+# stat lookup. Used by on_turn_boundary_speed's forced-scarf check
+# (max_non_scarf comparison) and by priors.py's spread filter.
+def _build_base_speeds_table() -> dict[str, int]:
+    """Build {normalized_species → base_speed_stat} from poke-env's gen-9
+    pokedex. Called once at module load.
+    """
+    from poke_env.data import GenData
+
+    pokedex = GenData.from_gen(9).pokedex
+    out: dict[str, int] = {}
+    for species_id, entry in pokedex.items():
+        stats = entry.get("baseStats") or {}
+        spe = stats.get("spe")
+        if spe is not None:
+            out[species_id] = int(spe)
+    return out
+
+
+_BASE_SPEEDS: dict[str, int] = _build_base_speeds_table()
+
 # Items ruled out when R4 fires (= every other plausible item becomes
 # impossible because only HDB explains the absence of hazard damage in
 # the carve-out-failed branch). HDB itself is excluded — it's the
