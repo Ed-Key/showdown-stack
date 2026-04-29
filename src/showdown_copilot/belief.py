@@ -855,6 +855,125 @@ class BeliefTracker:
     # docs/superpowers/specs/2026-04-29-plan-h-phase2-speed-range-design.md
     # ------------------------------------------------------------------
 
+    def on_turn_boundary_speed(
+        self,
+        species: str,
+        turn: int,
+        my_active_speed_post_modifiers: int,
+        opp_moved_first: bool | None,
+        skip_reasons: list[str] | None = None,
+        in_trick_room: bool = False,
+        weather: str | None = None,
+        terrain: str | None = None,
+    ) -> None:
+        """Narrow opp's speed_range based on this turn's move ordering.
+
+        Mirrors foul-play's check_speed_ranges (paraphrased — see
+        analysis/plan-h-phase2-research/foul-play-speed.md). Algorithm:
+
+        1. Message-based skip-list (caller passes via skip_reasons).
+        2. opp_moved_first==None → caller couldn't determine order
+           (harness path without move-order capture). Record + skip.
+        3. State-based skip: opp's scarf already revealed.
+        4. State-based skip: opp's species could have unobserved
+           speed-mod ability (Swift Swim under rain, etc.).
+        5. Record observation, apply Trick Room inversion.
+        6. Tighten speed_range: opp_moved_first ⇒ raise min; else ⇒ lower max.
+        7. Forced-scarf check: if min > max_non_scarf, infer scarf and
+           lift the upper bound into scarf-bracket territory.
+
+        Args:
+          species: opp Pokemon's normalized species string.
+          turn: Showdown turn number (for audit history).
+          my_active_speed_post_modifiers: bot's speed AFTER all modifiers
+            (boost stage, paralysis, Tailwind, Choice Scarf,
+            protosynthesis-Spe). Caller computes via
+            stats.apply_bot_speed_modifier_chain.
+          opp_moved_first: True iff opp's |move| event preceded ours.
+            None when caller can't determine (harness w/o move-order).
+          skip_reasons: list of conditions making this turn uninformative.
+            Non-empty → record "skipped:<first_reason>" and NO-OP.
+          in_trick_room: from battle.fields[Field.TRICK_ROOM] presence.
+          weather: Showdown weather string ("RainDance", etc.) or None.
+          terrain: Showdown terrain string ("ELECTRIC_TERRAIN", etc.) or None.
+        """
+        b = self.get(species)
+        my_speed = my_active_speed_post_modifiers
+
+        # 1. Message-based skip-list
+        if skip_reasons:
+            b.speed_observations.append(
+                (turn, my_speed, f"skipped:{skip_reasons[0]}")
+            )
+            return
+
+        # 2. Move-order unknown (harness path with no override)
+        if opp_moved_first is None:
+            b.speed_observations.append((turn, my_speed, "skipped:no_move_order"))
+            return
+
+        # 3. State-based skip: opp scarf already revealed
+        if b.revealed_item == "choicescarf":
+            return
+
+        # 4. State-based skip: opp could have unobserved speed-mod ability
+        if can_have_speed_modified(b, weather=weather, terrain=terrain):
+            b.speed_observations.append(
+                (turn, my_speed, "skipped:speed_modifier")
+            )
+            return
+
+        # 5. Record observation BEFORE applying narrowing
+        kind = "opp_first" if opp_moved_first else "us_first"
+        b.speed_observations.append((turn, my_speed, kind))
+
+        # 6. Trick Room inversion (slow goes first → invert)
+        effective_opp_first = (not opp_moved_first) if in_trick_room else opp_moved_first
+
+        # 7. Apply narrowing
+        if effective_opp_first:
+            new_min = my_speed + 1
+            if b.speed_range is None:
+                b.speed_range = (new_min, _SPEED_HI_SENTINEL)
+            else:
+                b.speed_range = (
+                    max(b.speed_range[0], new_min),
+                    b.speed_range[1],
+                )
+        else:
+            new_max = my_speed - 1
+            if b.speed_range is None:
+                b.speed_range = (0, new_max)
+            else:
+                b.speed_range = (
+                    b.speed_range[0],
+                    min(b.speed_range[1], new_max),
+                )
+
+        # 8. Forced-scarf check (fires only when narrowed range exceeds
+        # max-non-scarf bracket — opp moved too fast to be non-scarf)
+        base_speed = _BASE_SPEEDS.get(_normalize(species))
+        if base_speed is None:
+            return
+        # Max non-scarf Speed: 252 EV / +nature / 31 IV / level 100
+        max_non_scarf = compute_speed_stat(base_speed, 252, 31, 1.1, 100)
+        if (
+            b.speed_range[0] > max_non_scarf
+            and "choicescarf" not in b.impossible_items
+        ):
+            self.infer_choicescarf(species)
+            # Lift the upper bound: a us_first observation that gave us
+            # max=393 means "non-scarf opp slower than 393" which is now
+            # invalid; the scarf-aware equivalent of 393 is 589.
+            current_max = b.speed_range[1]
+            if current_max < _SPEED_HI_SENTINEL:
+                scarf_max = int(current_max * 1.5)
+                # If even scarf-bracket can't reconcile, fall to sentinel
+                # (the spread filter will fall through to unfiltered modal).
+                if scarf_max < b.speed_range[0]:
+                    scarf_max = _SPEED_HI_SENTINEL
+                b.speed_range = (b.speed_range[0], max(current_max, scarf_max))
+
     def infer_choicescarf(self, species: str) -> None:
         """Promote ``item_inferred_choicescarf=True``. Adds non-scarf
         Choice items to ``impossible_items`` (the Choice trio is mutex —

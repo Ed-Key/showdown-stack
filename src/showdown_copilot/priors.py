@@ -11,9 +11,22 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from showdown_copilot.models import ModalSet
+from showdown_copilot.stats import _NATURE_TO_SPE_MULT, compute_speed_stat
 
 if TYPE_CHECKING:
     from showdown_copilot.belief import OpponentBelief
+
+
+def _get_base_speeds() -> dict[str, int]:
+    """Lazy accessor for belief._BASE_SPEEDS to avoid a hard import cycle.
+
+    belief.py imports from stats and _ability_pools but NOT priors at
+    runtime. We can't import _BASE_SPEEDS at module load because tests may
+    set up sys.modules ordering; the lazy accessor sidesteps the issue.
+    """
+    from showdown_copilot.belief import _BASE_SPEEDS
+
+    return _BASE_SPEEDS
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +71,38 @@ def _weighted_pick(d: dict[str, float], rng: random.Random) -> str | None:
     if total <= 0:
         return None
     return rng.choices(keys, weights=weights, k=1)[0]
+
+
+def _spread_consistent_with_speed(
+    spread_key: str, base_speed: int, belief: "OpponentBelief"
+) -> bool:
+    """Return True iff the spread's computed Speed fits belief.speed_range,
+    accounting for the Choice Scarf 1.5× bracket.
+
+    Plan H Phase 2 spread filter. Called by _modal_set_from_consistent_candidates
+    when belief.speed_range is set. Considers BOTH the unscarfed and scarfed
+    brackets unless one is excluded by impossible_items / item_inferred_choicescarf.
+    """
+    nature, evs = _parse_spread(spread_key)
+    nat_mult = _NATURE_TO_SPE_MULT.get(nature, 1.0)
+    raw = compute_speed_stat(base_speed, evs.get("spe", 0), 31, nat_mult, 100)
+
+    if belief.speed_range is None:
+        return True
+    lo, hi = belief.speed_range
+
+    if belief.item_inferred_choicescarf:
+        # Forced scarf bracket only.
+        return lo <= int(raw * 1.5) <= hi
+
+    # Non-scarf bracket (raw speed).
+    if lo <= raw <= hi:
+        return True
+    # Scarf bracket if scarf still allowed by other rules.
+    if "choicescarf" not in belief.impossible_items:
+        if lo <= int(raw * 1.5) <= hi:
+            return True
+    return False
 
 
 def _weighted_pick_n_distinct(d: dict[str, float], n: int, rng: random.Random) -> list[str]:
@@ -256,10 +301,21 @@ class PriorsSource:
         if chosen_moves is None:
             return None  # revealed move not in chaos data at all
 
-        # Spreads: chaos spreads aren't reliably filterable by belief in
-        # Phase 1 (we'd need to derive Spe range from speed_range, which is
-        # Phase 2). For now, just modal-pick over the unfiltered Spreads.
-        spread_key = _top_key(entry.get("Spreads", {}))
+        # Spreads: filter by belief.speed_range when narrowed (Phase 2).
+        # When the filter empties the distribution, return None to trigger
+        # fall-through to the unfiltered modal path (consistent with the
+        # items / abilities / moves filter behavior above).
+        spreads_dist: dict[str, float] = entry.get("Spreads", {}) or {}
+        if belief.speed_range is not None:
+            base_speed = _get_base_speeds().get(_normalize(species))
+            if base_speed is not None:
+                spreads_dist = {
+                    k: v for k, v in spreads_dist.items()
+                    if _spread_consistent_with_speed(k, base_speed, belief)
+                }
+                if not spreads_dist:
+                    return None
+        spread_key = _top_key(spreads_dist)
         if spread_key:
             nature, evs = _parse_spread(spread_key)
         else:
