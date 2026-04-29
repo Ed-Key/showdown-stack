@@ -13,7 +13,11 @@ export default defineContentScript({
     // page-context globals (declared loose so TS doesn't choke)
     const win: any = window;
 
-    const ENGINE_URL = 'http://localhost:7267/analyze/stream';
+    // Plan H proxy on :7271 forwards to engine on :7267 with belief-aware
+    // opp-Pokemon overlays. If the proxy isn't running the request fails;
+    // start it with `python -m showdown_copilot.proxy`. To bypass the proxy
+    // entirely (e.g., when only the engine is running), point this at :7267.
+    const ENGINE_URL = 'http://localhost:7271/analyze/stream';
     const POLL_MS = 500;
     const ANALYSIS_TIME_MS = 6000;
     const UPDATE_INTERVAL_MS = 400;
@@ -281,6 +285,218 @@ export default defineContentScript({
           speed: boosts?.spe || 0,
         },
         forceTrapped: !!req?.active?.[0]?.trapped,
+      };
+    }
+
+    // ---- Phase 2: priority-move lookup + speed-modifier chain --------
+    // Mirrors showdown_copilot/speed_inference_hooks.py:lookup_move_priority
+    // and stats.py:apply_bot_speed_modifier_chain. Kept inline (no shared
+    // module) because the extension build already inlines content.ts.
+    const PRIORITY_PLUS_ONE = new Set([
+      'aquajet', 'bulletpunch', 'iceshard', 'machpunch', 'quickattack',
+      'shadowsneak', 'suckerpunch', 'vacuumwave', 'watershuriken',
+      'accelerock', 'jetpunch', 'icicleshard',
+    ]);
+    const PRIORITY_PLUS_TWO = new Set(['extremespeed', 'feint']);
+    const PRIORITY_PLUS_THREE = new Set(['fakeout', 'firstimpression']);
+
+    function lookupMovePriority(moveId: string): number {
+      if (PRIORITY_PLUS_ONE.has(moveId)) return 1;
+      if (PRIORITY_PLUS_TWO.has(moveId)) return 2;
+      if (PRIORITY_PLUS_THREE.has(moveId)) return 3;
+      return 0;
+    }
+
+    // Apply the bot's modifier chain to its known speed stat. Mirrors
+    // stats.py order: boost → paralysis → tailwind → choicescarf → proto.
+    function applyBotSpeedModifierChain(opts: {
+      baseSpeed: number;
+      boostStage: number;       // -6..+6
+      hasTailwind: boolean;
+      isParalyzed: boolean;
+      hasChoiceScarf: boolean;
+      hasProtosynthesisSpe: boolean;
+    }): number {
+      const boostMult: Record<number, number> = {
+        '-6': 2 / 8, '-5': 2 / 7, '-4': 2 / 6, '-3': 2 / 5, '-2': 2 / 4, '-1': 2 / 3,
+        '0': 1.0,
+        '1': 3 / 2, '2': 4 / 2, '3': 5 / 2, '4': 6 / 2, '5': 7 / 2, '6': 8 / 2,
+      };
+      let s = Math.trunc(opts.baseSpeed * (boostMult[opts.boostStage] ?? 1));
+      if (opts.isParalyzed) s = Math.trunc(s / 2);   // gen 9 default
+      if (opts.hasTailwind) s = s * 2;
+      if (opts.hasChoiceScarf) s = Math.trunc(s * 1.5);
+      if (opts.hasProtosynthesisSpe) s = Math.trunc(s * 1.5);
+      return s;
+    }
+
+    // Parse battle.stepQueue for the move events of a specific turn.
+    // stepQueue is the canonical replay buffer Showdown maintains; each
+    // entry is a single protocol line like "|move|p2a: Mon|EQ|p1a: Tusk".
+    // Returns {moveLog, skipFlags} for the just-finished turn N (i.e.
+    // events between |turn|N| and |turn|N+1|, exclusive).
+    function extractTurnMoveOrder(b: any, turn: number): {
+      moveLog: Array<{ side: string; species: string; moveId: string; priority: number }>;
+      skipFlags: string[];
+    } {
+      const stepQueue: string[] = b?.stepQueue || [];
+      const moveLog: Array<{ side: string; species: string; moveId: string; priority: number }> = [];
+      const skipFlags: string[] = [];
+      let inTurn = false;
+      for (const line of stepQueue) {
+        const parts = line.split('|');
+        // parts[0] is "" (line starts with |); parts[1] is the kind.
+        if (parts[1] === 'turn') {
+          const t = parseInt(parts[2] || '0', 10);
+          if (t === turn) { inTurn = true; continue; }
+          if (t > turn) break;
+        }
+        if (!inTurn) continue;
+        const kind = parts[1];
+        if (kind === 'move') {
+          const actor = parts[2] || '';
+          const moveName = parts[3] || '';
+          let side = '';
+          if (actor.includes('a:')) side = actor.split('a:')[0];
+          else if (actor.includes('b:')) side = actor.split('b:')[0];
+          const species = actor.includes(': ')
+            ? actor.split(': ').slice(1).join(': ').trim()
+            : '';
+          const moveId = norm(moveName);
+          moveLog.push({ side, species, moveId, priority: lookupMovePriority(moveId) });
+        } else if (kind === 'cant') {
+          skipFlags.push('cant');
+        } else if (kind === 'switch') {
+          skipFlags.push('switch');
+        } else if (kind === '-activate') {
+          const joined = line.toLowerCase();
+          if (joined.endsWith('confusion')) skipFlags.push('confusion');
+          else if (joined.includes('quick claw')) skipFlags.push('quick_claw');
+          else if (joined.includes('quick draw')) skipFlags.push('quick_draw');
+        } else if (kind === '-enditem') {
+          const joined = line.toLowerCase();
+          if (joined.includes('custap berry') || joined.includes('custapberry')) {
+            skipFlags.push('custap');
+          }
+        }
+      }
+      return { moveLog, skipFlags };
+    }
+
+    // Showdown-side weather/terrain/TR detection for the proxy.
+    function detectWeather(b: any): string | null {
+      const w = (b?.weather || '').toLowerCase();
+      // Showdown emits lowercase keys; map to Plan H expected strings.
+      const map: Record<string, string> = {
+        raindance: 'RainDance',
+        sunnyday: 'SunnyDay',
+        sandstorm: 'Sandstorm',
+        hail: 'Hail',
+        snow: 'Snow',
+      };
+      return map[w] || null;
+    }
+
+    function detectTerrain(b: any): string | null {
+      const fields: any[] = b?.pseudoWeather || [];
+      for (const f of fields) {
+        const id = (f?.[0] || '').toString().toLowerCase();
+        if (id === 'electricterrain') return 'ELECTRIC_TERRAIN';
+        if (id === 'grassyterrain') return 'GRASSY_TERRAIN';
+        if (id === 'mistyterrain') return 'MISTY_TERRAIN';
+        if (id === 'psychicterrain') return 'PSYCHIC_TERRAIN';
+      }
+      return null;
+    }
+
+    function isTrickRoom(b: any): boolean {
+      const fields: any[] = b?.pseudoWeather || [];
+      return fields.some((f: any) => (f?.[0] || '').toString().toLowerCase() === 'trickroom');
+    }
+
+    // Plan H proxy metadata. Attached to the BattleRequest payload after
+    // translate() so the proxy can build a per-battle BeliefTracker keyed
+    // on a stable battleId, key reveals by normalized species (matching
+    // buildOppPokemon's `species` field), and pick the right format chaos
+    // cache. The engine ignores unknown top-level fields, so this is safe
+    // when the request is sent directly to :7267 instead of the proxy.
+    function buildPlanHMeta(b: any, br: any) {
+      const farSide = b?.farSide;
+      const oppMonsRaw = farSide?.pokemon || [];
+      const oppRevealedMoves: Record<string, string[]> = {};
+      for (const p of oppMonsRaw) {
+        const speciesRaw = p?.speciesForme || p?.species?.name || p?.species || '';
+        const key = norm(speciesRaw);
+        if (!key) continue;
+        const moves = (p?.moveTrack || [])
+          .map((m: [string, number]) => norm(m?.[0]))
+          .filter((s: string) => !!s);
+        oppRevealedMoves[key] = moves;
+      }
+
+      // ---- Phase 2: speed-inference metadata ----
+      // Showdown sends decision requests at the START of each turn, so
+      // when we see turn=N, we can extract move-order for turn N-1.
+      const currentTurn = b?.turn || 0;
+      const justFinishedTurn = currentTurn - 1;
+      let oppMoveOrderThisTurn: any = null;
+      let myActiveSpeedPostModifiers = 0;
+      const myActive = b?.mySide?.active?.[0];
+      const oppActive = farSide?.active?.[0];
+
+      // Compute bot's post-modifier speed (used as the threshold for
+      // opp's unknown speed). Read directly from the Showdown side state.
+      if (myActive && b?.myPokemon) {
+        // Find the corresponding myPokemon entry to get the actual speed stat.
+        const target = norm(myActive.species?.name || myActive.speciesForme);
+        const myMon = (b.myPokemon || []).find(
+          (p: any) => norm(p.speciesForme || p.species) === target,
+        );
+        const baseSpeed = myMon?.stats?.spe || 0;
+        if (baseSpeed > 0) {
+          const isParalyzed = (myActive?.status || '').toLowerCase() === 'par';
+          const tailwindActive = !!(b?.mySide?.sideConditions?.tailwind);
+          const itemId = norm(myMon?.item || '');
+          const hasChoiceScarf = itemId === 'choicescarf';
+          // protosynthesisspe detection: look in volatileStatuses on active
+          const volStatuses: any[] = myActive?.volatileStatuses || [];
+          const hasProtoSpe = volStatuses.some((v: any) =>
+            ((v?.[0] || v || '') + '').toLowerCase().includes('protosynthesisspe'),
+          );
+          myActiveSpeedPostModifiers = applyBotSpeedModifierChain({
+            baseSpeed,
+            boostStage: myActive?.boosts?.spe || 0,
+            hasTailwind: tailwindActive,
+            isParalyzed,
+            hasChoiceScarf,
+            hasProtosynthesisSpe: hasProtoSpe,
+          });
+        }
+      }
+
+      if (justFinishedTurn >= 1) {
+        const { moveLog, skipFlags } = extractTurnMoveOrder(b, justFinishedTurn);
+        const myRole = (b?.mySide?.sideid || '').toLowerCase() || null;
+        const activeOppSpeciesRaw = oppActive?.speciesForme || oppActive?.species?.name || '';
+        oppMoveOrderThisTurn = {
+          turn: justFinishedTurn,
+          moveLog,
+          skipFlags,
+          myRole,
+          activeOppSpecies: norm(activeOppSpeciesRaw),
+          myActiveSpeedPostModifiers,
+        };
+      }
+
+      return {
+        battleId: br?.id || '',
+        format: b?.tier || 'gen9ou',
+        oppRevealedMoves,
+        // Phase 2 fields (proxy reads when present; absent = Phase 1 client)
+        oppMoveOrderThisTurn,
+        weather: detectWeather(b),
+        terrain: detectTerrain(b),
+        inTrickRoom: isTrickRoom(b),
       };
     }
 
@@ -912,7 +1128,8 @@ export default defineContentScript({
       }
 
       try {
-        const payload = translate(b, req);
+        const payload: any = translate(b, req);
+        payload._planH = buildPlanHMeta(b, br);
         // Guard: refuse to POST if active opp's types didn't resolve. Empty
         // types silently downgrade to Typeless on the engine side, which
         // broke immunity checks (observed 2026-04-20: Togekiss with types=[]
