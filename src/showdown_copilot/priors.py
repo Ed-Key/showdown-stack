@@ -275,6 +275,16 @@ class PriorsSource:
             if _normalize(k) not in belief.impossible_items
             and (belief.revealed_item is None or _normalize(k) == belief.revealed_item)
         }
+        # Bracket math forced Choice Scarf (e.g. opp moved first against a
+        # fully-modified speed too high for any non-scarf bracket). Hard-lock
+        # the modal item to choicescarf so non-scarf items (Life Orb, etc.)
+        # can't win the modal pick. infer_choicescarf already poisons the
+        # Choice trio via impossible_items, but Life Orb / Z-Crystal / Boots
+        # would still pass that filter without this lock.
+        if belief.item_inferred_choicescarf and belief.revealed_item is None:
+            items_dist = {
+                k: v for k, v in items_dist.items() if _normalize(k) == "choicescarf"
+            }
         if not items_dist:
             return None  # no consistent item
 
@@ -347,22 +357,32 @@ class PriorsSource:
         is a superset of `revealed`. Returns None if a revealed move is
         missing from the chaos distribution entirely.
 
+        Hidden Power fuzzy match: Showdown's `|move|` event reports
+        "Hidden Power" with no type, so revealed_moves typically contains
+        bare `hiddenpower`. Chaos data only has typed variants
+        (`hiddenpowerice`, `hiddenpowerfighting`, ...). We treat a
+        revealed `hiddenpower<x>` (or bare `hiddenpower`) as satisfied by
+        ANY chaos `hiddenpower<y>` entry, and surface the REVEALED type
+        in the kept list so downstream damage calc uses the right type.
+
         Returned move ids are normalized (lowercase alphanumeric), matching
         the convention used by `_top_n_keys` consumers downstream and by
         `OpponentBelief.revealed_moves`.
         """
-        # Map normalized → (display_key, weight) so we can match revealed
-        # set to chaos display names
         norm_to_key: dict[str, tuple[str, float]] = {}
         for key, weight in moves_dist.items():
             norm_to_key[_normalize(key)] = (key, float(weight))
 
-        # Defensive: every revealed move must exist in the chaos distribution.
-        # Verify ALL of them up front (not just the first 4 we'd keep) so a
-        # bogus 5th revealed move fails the filter loudly instead of being
-        # silently dropped.
-        if not revealed.issubset(norm_to_key.keys()):
+        chaos_has_hp = any(k.startswith("hiddenpower") for k in norm_to_key)
+
+        for rev in revealed:
+            if rev in norm_to_key:
+                continue
+            if rev.startswith("hiddenpower") and chaos_has_hp:
+                continue  # fuzzy match: chaos has SOME hiddenpower variant
             return None
+
+        revealed_has_hp = any(r.startswith("hiddenpower") for r in revealed)
 
         # Iterate revealed in sorted order for log/debug determinism (Python
         # set iteration order is implementation-dependent).
@@ -372,11 +392,17 @@ class PriorsSource:
             if len(kept) >= 4:
                 break
 
-        # Fill remaining slots with the top moves (excluding kept)
-        remaining = [
-            (norm, w) for norm, (_key, w) in norm_to_key.items()
-            if norm not in kept
-        ]
+        # Fill remaining slots with the top moves (excluding kept). When the
+        # revealed set already contains a hiddenpower variant, suppress all
+        # OTHER hiddenpower variants from chaos so we don't double-fill the
+        # set with two HP moves of different types.
+        remaining = []
+        for norm, (_key, w) in norm_to_key.items():
+            if norm in kept:
+                continue
+            if revealed_has_hp and norm.startswith("hiddenpower"):
+                continue
+            remaining.append((norm, w))
         remaining.sort(key=lambda kw: -kw[1])  # highest weight first
         for norm, _w in remaining:
             if len(kept) >= 4:
