@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from showdown_copilot.belief import BeliefTracker
+from showdown_copilot.models import Distributions
 from showdown_copilot.priors import PriorsSource
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,11 @@ _format_resolution: dict[str, str | None] = {}
 # requests per turn (mid-turn force-switch, polling latency); we want
 # speed inference to fire AT MOST ONCE per actual game turn boundary.
 _last_speed_turn: dict[str, int] = {}
+# Per-battle resolved chaos format. Populated from `apply_belief` once the
+# format alias chain resolves, then read by GET /belief/{battle_id} so the
+# endpoint can call `_priors.get_distributions` with the right format
+# without having to re-derive it from the request stream.
+_format_by_battle: dict[str, str] = {}
 # Hardcoded fallback chain: when the requested format has no cache locally
 # and no chaos available on Smogon, try these in order. Strict-superset
 # relationships per `project_chaos_cache_hack.md`. Keys are the format
@@ -368,6 +374,8 @@ def apply_belief(req: dict[str, Any]) -> dict[str, Any]:
     # requested format has no chaos cache, and remember a global failure
     # so we don't retry per-Pokemon.
     resolved_fmt = _resolve_format(fmt)
+    if resolved_fmt is not None:
+        _format_by_battle[battle_id] = resolved_fmt
 
     tracker = _get_tracker(battle_id)
     opp_pokemon = (req.get("sideTwo") or {}).get("pokemon") or []
@@ -467,6 +475,58 @@ async def healthz() -> JSONResponse:
             "engine_url": ENGINE_URL,
         }
     )
+
+
+def _serialize_distributions(d: Distributions) -> dict:
+    """Convert dist dicts to sorted [{name, pct}] lists for the extension UI."""
+    def _to_list(dist: dict[str, float], top_n: int) -> list[dict]:
+        items = sorted(dist.items(), key=lambda kv: -kv[1])[:top_n]
+        return [{"name": name, "pct": round(pct * 100, 1)} for name, pct in items]
+    return {
+        "moves": _to_list(d.moves, top_n=8),
+        "items": _to_list(d.items, top_n=5),
+        "abilities": _to_list(d.abilities, top_n=3),
+        "spreads": _to_list(d.spreads, top_n=3),
+        "tera_types": _to_list(d.tera_types, top_n=5),
+    }
+
+
+def _empty_dists() -> dict:
+    return {"moves": [], "items": [], "abilities": [], "spreads": [], "tera_types": []}
+
+
+@app.get("/belief/{battle_id}")
+async def get_belief(battle_id: str) -> JSONResponse:
+    """Expose per-opponent belief + chaos modal probabilities for the extension."""
+    tracker = _trackers.get(battle_id)
+    if tracker is None:
+        raise HTTPException(status_code=404, detail=f"no tracker for battle_id={battle_id}")
+
+    fmt = _format_by_battle.get(battle_id)
+    if fmt is None:
+        raise HTTPException(status_code=409, detail=f"no format known for battle_id={battle_id}")
+
+    assert _priors is not None
+    out: dict[str, dict] = {}
+    for species, belief in tracker.all_beliefs().items():
+        display = _resolve_display_species(species, fmt)
+        dists = _priors.get_distributions(display, fmt, belief=belief)
+        out[species] = {
+            "revealed": {
+                "moves": sorted(belief.revealed_moves),
+                "item": belief.revealed_item,
+                "ability": belief.revealed_ability,
+                "tera_type": belief.tera_type if belief.terastallized else None,
+            },
+            "modal": _serialize_distributions(dists) if dists else _empty_dists(),
+            "speed_range": belief.speed_range,
+            "item_inferred_choicescarf": belief.item_inferred_choicescarf,
+        }
+    return JSONResponse({
+        "battle_id": battle_id,
+        "format": fmt,
+        "opponents": out,
+    })
 
 
 # Where note-disk syncs land. Path is relative to the workspace repo so notes

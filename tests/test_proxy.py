@@ -7,6 +7,7 @@ manually via curl in the run instructions.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,9 +34,11 @@ def install_priors(chaos_cache, monkeypatch):
     monkeypatch.setattr(proxy, "_priors", PriorsSource(cache_dir=chaos_cache))
     proxy._trackers.clear()
     proxy._display_cache.clear()
+    proxy._format_by_battle.clear()
     yield
     proxy._trackers.clear()
     proxy._display_cache.clear()
+    proxy._format_by_battle.clear()
 
 
 def _opp_mon(species, item="none", ability="none", tera="", terastallized=False):
@@ -268,3 +271,75 @@ def test_tera_extension_override_wins():
     )
     out = proxy.apply_belief(req)
     assert out["teraBanned"] is False
+
+
+# ---- /belief endpoint tests ----------------------------------------------
+
+@pytest.fixture
+def belief_chaos(tmp_path, monkeypatch):
+    """Chaos data containing Garchomp + Tyranitar for /belief endpoint tests.
+    Overrides the `install_priors` fixture's PriorsSource for this scope."""
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {
+                    "earthquake": 0.50, "stoneedge": 0.30,
+                    "swordsdance": 0.20, "scaleshot": 0.18,
+                },
+                "Items": {"rockyhelmet": 0.40, "choiceband": 0.25, "lifeorb": 0.20},
+                "Abilities": {"roughskin": 0.90, "sandveil": 0.10},
+                "Spreads": {"Adamant:0/252/0/0/4/252": 0.80},
+                "Tera Types": {"Steel": 0.50, "Fire": 0.30},
+            },
+            "Tyranitar": {
+                "Moves": {
+                    "stoneedge": 0.60, "earthquake": 0.40,
+                    "knockoff": 0.30, "stealthrock": 0.25,
+                },
+                "Items": {"smoothrock": 0.40, "leftovers": 0.30, "assaultvest": 0.15},
+                "Abilities": {"sandstream": 0.95, "unnerve": 0.05},
+                "Spreads": {"Adamant:252/64/0/0/192/0": 0.70},
+                "Tera Types": {"Steel": 0.40, "Flying": 0.30},
+            },
+        }
+    }
+    (tmp_path / "gen9ou-1630.json").write_text(json.dumps(data))
+    monkeypatch.setattr(proxy, "_priors", PriorsSource(cache_dir=tmp_path))
+    proxy._display_cache.clear()
+
+
+@pytest.fixture
+def sample_belief_state(belief_chaos):
+    """Seed proxy._trackers and per-battle format with garchomp (revealed: EQ,
+    item) + tyranitar (no reveals) for battle_id 'test-battle-1'."""
+    bid = "test-battle-1"
+    tracker = proxy._get_tracker(bid)
+    tracker.on_reveal_move("Garchomp", "earthquake")
+    tracker.on_reveal_item("Garchomp", "choiceband")
+    tracker.get("Tyranitar")  # entry exists, no reveals
+    proxy._format_by_battle[bid] = "gen9ou"
+    return bid
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+    return TestClient(proxy.app)
+
+
+def test_get_belief_returns_per_opp_revealed_and_modal(client, sample_belief_state):
+    response = client.get(f"/belief/{sample_belief_state}")
+    assert response.status_code == 200
+    body = response.json()
+    assert "format" in body
+    assert "opponents" in body
+    assert "garchomp" in body["opponents"]
+    g = body["opponents"]["garchomp"]
+    assert g["revealed"]["moves"] == ["earthquake"]
+    assert g["revealed"]["item"] == "choiceband"
+    assert g["modal"]["moves"]  # list of {name, pct}
+    assert all(set(m.keys()) == {"name", "pct"} for m in g["modal"]["moves"])
+    # tyranitar has no reveals; modal still populated from chaos
+    t = body["opponents"]["tyranitar"]
+    assert t["revealed"]["moves"] == []
+    assert len(t["modal"]["moves"]) >= 1
