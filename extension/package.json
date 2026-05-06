@@ -17,5 +17,8 @@
     "typescript": "^5.6.0",
     "vitest": "^4.1.5",
     "wxt": "^0.20.0"
+  },
+  "dependencies": {
+    "@smogon/calc": "^0.11.0"
   }
 }
