@@ -31,108 +31,6 @@ export default defineContentScript({
     const ANALYSIS_TIME_MS = 6000;
     const UPDATE_INTERVAL_MS = 400;
 
-    function typeMult(atkType: string, defTypes: string[]) {
-      let m = 1;
-      for (const dt of defTypes || []) {
-        const eff = TYPE_CHART[atkType]?.[dt];
-        if (eff !== undefined) m *= eff;
-      }
-      return m;
-    }
-
-    function leadScore(myMon: any, oppTeam: any[]) {
-      const myTypes = resolveTypes(myMon.speciesForme || myMon.species, win);
-      let total = 0;
-      for (const opp of oppTeam) {
-        const oppName = opp.species?.name || opp.speciesForme || opp.species;
-        const oppTypes = resolveTypes(oppName, win);
-        let myBest = 0, theirBest = 0;
-        for (const t of myTypes) myBest = Math.max(myBest, typeMult(t, oppTypes));
-        for (const t of oppTypes) theirBest = Math.max(theirBest, typeMult(t, myTypes));
-        total += myBest - theirBest;
-      }
-      return total;
-    }
-
-    // ---- Lead matrix: archetype detection + per-archetype lead pick ------
-    // Hand-tuned for the v2 Tyranitar team (Diancie/Heatran/Tyranitar/
-    // Gholdengo/Dragonite/Urshifu-Rapid-Strike). When opp archetype matches
-    // and our team has the suggested lead, returns {lead, reason, archetype};
-    // otherwise returns null and the panel falls back to the leadScore
-    // heuristic. See analysis/team-build/2026-04-29-natdex-team-v2-tyranitar.md §5.
-    const LM_RAIN = new Set(['pelipper']);
-    const LM_SUN = new Set(['torkoal', 'charizardmegay', 'ninetalesalola']);
-    const LM_ZOROARK = new Set(['zoroark', 'zoroarkhisui']);
-    const LM_TR = new Set(['hatterene', 'indeedeefemale', 'magearna', 'porygon2']);
-    const LM_STALL = new Set([
-      'alomomola', 'toxapex', 'chansey', 'blissey', 'clodsire',
-      'pecharunt', 'corviknight', 'gliscor', 'dondozo', 'ferrothorn',
-    ]);
-    const LM_HO = new Set([
-      'volcarona', 'ironvaliant', 'ceruledge', 'ogerponwellspring',
-      'dianciemega', 'diancie', 'gholdengo', 'ironbundle',
-    ]);
-    const LM_HAZARD_PAIRS: Array<Set<string>> = [
-      new Set(['garchomp', 'irontreads']),
-      new Set(['garchomp', 'landorustherian']),
-      new Set(['landorustherian', 'heatran']),
-    ];
-
-    function detectOppArchetype(oppSpeciesNorm: Set<string>): string {
-      const has = (set: Set<string>) => {
-        for (const s of set) if (oppSpeciesNorm.has(s)) return true;
-        return false;
-      };
-      const intersectCount = (set: Set<string>) => {
-        let n = 0;
-        for (const s of set) if (oppSpeciesNorm.has(s)) n++;
-        return n;
-      };
-      if (has(LM_RAIN)) return 'rain';
-      if (has(LM_SUN)) return 'sun';
-      if (has(LM_ZOROARK)) return 'zoroark_ho';
-      if (has(LM_TR)) return 'trick_room';
-      if (oppSpeciesNorm.has('tyranitar') && oppSpeciesNorm.has('excadrill')) return 'sand_ho';
-      if (intersectCount(LM_STALL) >= 3) return 'stall';
-      for (const pair of LM_HAZARD_PAIRS) {
-        let hits = 0;
-        for (const s of pair) if (oppSpeciesNorm.has(s)) hits++;
-        if (hits === pair.size) return 'hazard_stack';
-      }
-      if (intersectCount(LM_HO) >= 3) return 'hyper_offense';
-      return 'balance_or_unknown';
-    }
-
-    const LEAD_BY_ARCHETYPE: Record<string, { lead: string; reason: string }> = {
-      rain:                { lead: 'Tyranitar',   reason: 'Sand cancels rain on switch-in.' },
-      sun:                 { lead: 'Tyranitar',   reason: 'Sand cancels sun + Stone Edge OHKOs CharY (Rock 4x).' },
-      zoroark_ho:          { lead: 'Tyranitar',   reason: 'Pursuit traps Zoroark on Illusion-drop (Dark 2x).' },
-      trick_room:          { lead: 'Diancie',     reason: 'Magic Bounce + Diamond Storm chunks Hatterene/setup.' },
-      sand_ho:             { lead: 'Heatran',     reason: 'Magma Storm + Taunt blunts Excadrill setup.' },
-      stall:               { lead: 'Heatran',     reason: 'Magma Storm traps Alo/Toxapex; Taunt blocks recovery.' },
-      hazard_stack:        { lead: 'Diancie',     reason: 'Magic Bounce reflects opp rocks; Earth Power 2HKOs Heatran.' },
-      hyper_offense:       { lead: 'Diancie',     reason: 'Magic Bounce + Diamond Storm OHKOs +0 Volc.' },
-      balance_or_unknown:  { lead: 'Diancie',     reason: 'Default — Magic Bounce protects vs hazards.' },
-    };
-
-    function leadMatrixRecommendation(
-      myTeam: any[], oppTeam: any[]
-    ): { lead: string; reason: string; archetype: string; myMon: any } | null {
-      if (!myTeam.length || !oppTeam.length) return null;
-      const oppNorm = new Set(
-        oppTeam.map((p: any) => norm(p.species?.name || p.speciesForme || p.species || ''))
-      );
-      const archetype = detectOppArchetype(oppNorm);
-      const pick = LEAD_BY_ARCHETYPE[archetype];
-      if (!pick) return null;
-      const target = norm(pick.lead);
-      const myMon = myTeam.find(
-        (m: any) => norm(m.speciesForme || m.species || '') === target
-      );
-      if (!myMon) return null;  // user is on a different team — fall back to heuristic
-      return { lead: pick.lead, reason: pick.reason, archetype, myMon };
-    }
-
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
     panel.id = 'sc-panel';
@@ -210,7 +108,6 @@ export default defineContentScript({
     document.body.appendChild(panel);
 
     const hdrEl = panel.querySelector<HTMLDivElement>('.sc-header')!;
-    const leadMatrixEl = panel.querySelector<HTMLDivElement>('.sc-lead-matrix')!;
     const bestEl = panel.querySelector<HTMLDivElement>('.sc-best')!;
     const statsEl = panel.querySelector<HTMLDivElement>('.sc-stats')!;
     const pvEl = panel.querySelector<HTMLDivElement>('.sc-pv')!;
@@ -484,9 +381,9 @@ export default defineContentScript({
 
     // When forceSwitch is true, the engine's bestMove may be a move like
     // "THUNDERPUNCH" that the user can't legally pick — Showdown only accepts
-    // a Pokemon. Filter engine response to switches; fall back to leadScore
-    // heuristic vs opp's current active if engine surfaced no switches in
-    // its top-K.
+    // a Pokemon. Filter engine response to switches; if engine surfaced no
+    // switches in its top-K, show plain-text "manual pick required" guidance
+    // (Stage 2 will replace this with damage-matrix-driven recommendation).
     function applyForceSwitchOverride(u: any) {
       const b = win.app?.curRoom?.battle;
       if (!b) return;
@@ -518,26 +415,10 @@ export default defineContentScript({
         statsEl.textContent = 'engine-ranked switch';
         return;
       }
-      // Heuristic fallback: leadScore vs opp's current active
-      const myActive = b.mySide?.active?.[0];
-      const myActiveSpecies = norm(myActive?.species?.name || myActive?.speciesForme || '');
-      const oppActive = b.farSide?.active?.[0];
-      if (!oppActive) return;
-      const candidates = myTeam
-        .filter((p: any) => !p.fainted && norm(p.speciesForme || p.species) !== myActiveSpecies)
-        .map((m: any) => ({
-          species: m.speciesForme || m.species,
-          score: leadScore(m, [oppActive]),
-        }))
-        .sort((a: any, b: any) => b.score - a.score);
-      if (!candidates.length) return;
-      const best = candidates[0];
-      hdrEl.textContent = 'Copilot — force switch (heuristic)';
-      bestEl.textContent = `→ ${best.species}  [heuristic ${best.score.toFixed(1)}]`;
-      altsEl.textContent = candidates.slice(1, 4)
-        .map((c: any) => `${c.species} (${c.score.toFixed(1)})`)
-        .join(' | ') || '—';
-      statsEl.textContent = 'heuristic — engine had no switch in top-K';
+      // Engine had no switch in top-K. Show plain-text guidance.
+      hdrEl.textContent = 'Copilot — force switch (engine returned no switch)';
+      bestEl.textContent = '— manual pick required';
+      statsEl.textContent = 'engine top-K had only moves; matrix card may help';
     }
 
     // Test hook: lets the controller synthetically trigger the force-switch
@@ -836,59 +717,18 @@ export default defineContentScript({
       }
       if (key === lastKey) { trace(`cache-skip key=${key}`); return; }
 
-      // Team Preview: lead matrix first, type-heuristic as fallback (no engine call)
+      // Team Preview: damage matrix not built yet (Stage 1). Show placeholder.
       if (req?.teamPreview) {
         const myTeam = b.myPokemon || [];
         const oppTeam = b.farSide?.pokemon || [];
         if (myTeam.length && oppTeam.length >= 1) {
-          const ranked = myTeam
-            .map((m: any) => ({
-              name: m.speciesForme || m.species,
-              score: leadScore(m, oppTeam),
-            }))
-            .sort((a: any, b: any) => b.score - a.score);
-          const matrix = leadMatrixRecommendation(myTeam, oppTeam);
-          hdrEl.textContent = 'Copilot — team preview';
-          if (matrix) {
-            // Display name in mega form when leading Diancie (the matrix's
-            // suggested form) — base form is what's in BattleRequest, but
-            // the user sees "Diancie-Mega" in the team builder.
-            const display = matrix.lead === 'Diancie' ? 'Diancie-Mega' : matrix.lead;
-            // Sticky line — survives subsequent turn renders so the user can
-            // refer back to the lead-matrix call mid-battle. Cleared on
-            // battle change via the post-match deinit (see scHistory reset).
-            leadMatrixEl.textContent = `Lead matrix: → ${display} · opp = ${matrix.archetype.replace(/_/g, ' ')} · ${matrix.reason}`;
-            leadMatrixEl.style.display = 'block';
-            console.log('[sc:lead-matrix]', {
-              archetype: matrix.archetype, lead: display, reason: matrix.reason,
-              oppTeam: oppTeam.map((p: any) => p.species?.name || p.speciesForme || p.species),
-            });
-            bestEl.textContent = `→ ${display}`;
-            statsEl.textContent = `opp archetype: ${matrix.archetype.replace(/_/g, ' ')} · matrix lead`;
-            pvEl.textContent = `Why: ${matrix.reason}`;
-            altsEl.textContent = 'heuristic ranks: ' + ranked
-              .slice(0, 3)
-              .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
-              .join(' | ');
-          } else {
-            // No archetype match — show heuristic, hide sticky matrix line.
-            leadMatrixEl.style.display = 'none';
-            console.log('[sc:lead-matrix]', {
-              archetype: 'no-match',
-              oppTeam: oppTeam.map((p: any) => p.species?.name || p.speciesForme || p.species),
-            });
-            const best = ranked[0];
-            bestEl.textContent = `→ ${best.name}`;
-            statsEl.textContent = `matchup score ${best.score.toFixed(1)} across ${oppTeam.length} opps · type heuristic`;
-            pvEl.textContent = 'PV: heuristic (no archetype match)';
-            altsEl.textContent = ranked
-              .slice(1, 4)
-              .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
-              .join(' | ');
-          }
-          lastKey = key; // done — opp data was ready
+          hdrEl.textContent = 'Copilot — team preview (matrix pending Stage 1)';
+          bestEl.textContent = '—';
+          statsEl.textContent = `${myTeam.length} v ${oppTeam.length}`;
+          pvEl.textContent = '';
+          altsEl.textContent = '';
+          lastKey = key;
         } else {
-          // Not ready: opp preview not loaded yet. DON'T cache — retry next poll.
           hdrEl.textContent = 'Copilot — team preview';
           bestEl.textContent = 'waiting for opponent preview…';
           statsEl.textContent = `my team: ${myTeam.length}, opp team: ${oppTeam.length}`;
