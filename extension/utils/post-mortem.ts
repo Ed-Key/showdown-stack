@@ -2,7 +2,7 @@
 // events and produces a compact per-battle post-mortem.
 // No DOM, no globals, no side effects — safe to import into Vitest.
 
-export const POSTMORTEM_SCHEMA_VERSION = 2 as const;
+export const POSTMORTEM_SCHEMA_VERSION = 3 as const;
 
 export type DecisionRecordInput = {
   battleId: string;
@@ -90,6 +90,7 @@ export type RegularTurnDiff = {
   faints: { side: 'mine' | 'opp'; species: string }[];
   failureMessages: string[];
   residualEvents: ResidualEvent[];
+  userNote: string | null;
 };
 
 export type ForceSwitchTurnDiff = {
@@ -107,6 +108,7 @@ export type ForceSwitchTurnDiff = {
   faintedBefore: { species: string; cause: string | null } | null;
   switchInTook: { hpPctLost: number; from: string } | null;
   residualEvents: ResidualEvent[];
+  userNote: string | null;
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -124,6 +126,7 @@ export type BattlePostMortem = {
   endedAtMs: number;
   teamPreview: { mine: string[]; opp: string[] } | null;
   turns: TurnDiff[];
+  battleNote: string | null;
 };
 
 export function parseBattlePostMortem(
@@ -173,6 +176,7 @@ export function parseBattlePostMortem(
     endedAtMs: Date.now(),
     teamPreview: pre.teamPreview,
     turns,
+    battleNote: null,
   };
 }
 
@@ -444,6 +448,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     faints: [...te.faints],
     failureMessages: [...te.hints],
     residualEvents: [...te.residualEvents],
+    userNote: null,
   };
 }
 
@@ -554,6 +559,7 @@ function buildForceSwitchTurnDiff(
     faintedBefore: fainted ? { species: fainted.species, cause } : null,
     switchInTook,
     residualEvents: [...residualEvents],
+    userNote: null,
   };
 }
 

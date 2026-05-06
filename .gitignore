@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+
+# Engine sub-repos (own git history, tracked separately)
+engine/
+engine-doubles/
+sidecar/

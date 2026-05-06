@@ -614,8 +614,8 @@ describe('parseBattlePostMortem — team preview (Pass 0)', () => {
   });
 });
 
-describe('parseBattlePostMortem — schema v2', () => {
-  it('emits schemaVersion 2', () => {
+describe('parseBattlePostMortem — schema current', () => {
+  it('emits current schemaVersion', () => {
     const stepQueue = [
       '|gametype|singles',
       '|player|p1|Opp|1|',
@@ -627,7 +627,7 @@ describe('parseBattlePostMortem — schema v2', () => {
     ];
     const records = [rec({ turn: 1, rqid: 1, final: { bestMove: 'Tackle', pv: ['you=TACKLE them=TACKLE'] } })];
     const pm = parseBattlePostMortem(records, stepQueue, META);
-    expect(pm.schemaVersion).toBe(2);
+    expect(pm.schemaVersion).toBe(POSTMORTEM_SCHEMA_VERSION);
   });
 
   it('RegularTurnDiff has residualEvents field', () => {
@@ -975,8 +975,8 @@ describe('parseBattlePostMortem — Phase 2 integration', () => {
   it('parses without throwing', () => {
     expect(pm).toBeTruthy();
   });
-  it('emits schemaVersion 2', () => {
-    expect(pm.schemaVersion).toBe(2);
+  it('emits current schemaVersion', () => {
+    expect(pm.schemaVersion).toBe(POSTMORTEM_SCHEMA_VERSION);
   });
   it('populates teamPreview with 6 mons per side', () => {
     expect(pm.teamPreview).toBeTruthy();
@@ -1001,5 +1001,42 @@ describe('parseBattlePostMortem — Phase 2 integration', () => {
   });
   it('winner matches fixture meta', () => {
     expect(pm.winner).toBe(phase2Fixture.meta.winner);
+  });
+});
+
+describe('parseBattlePostMortem — annotation fields (schema v3)', () => {
+  const stepQueue = [
+    '|gametype|singles',
+    '|player|p1|Opp|1|',
+    '|player|p2|Me|2|',
+    '|start',
+    '|switch|p1a: OppMon|Snorlax|100/100',
+    '|switch|p2a: MyMon|Keldeo|100/100',
+    '|turn|1',
+    '|move|p2a: MyMon|Secret Sword|p1a: OppMon',
+    '|-damage|p1a: OppMon|50/100',
+    '|move|p1a: OppMon|Body Slam|p2a: MyMon',
+    '|-damage|p2a: MyMon|70/100',
+    '|win|Me',
+  ];
+  const records: DecisionRecordInput[] = [
+    rec({
+      turn: 1, rqid: 1,
+      final: { bestMove: 'Secret Sword', confidence: 0.9, sims: 100, depth: 5, pv: [], alternatives: [] },
+    }),
+  ];
+
+  const pm = parseBattlePostMortem(records, stepQueue, META);
+
+  it('schemaVersion is 3', () => {
+    expect(pm.schemaVersion).toBe(3);
+  });
+  it('battleNote defaults to null on a fresh postmortem', () => {
+    expect(pm.battleNote).toBeNull();
+  });
+  it('userNote defaults to null on each turn', () => {
+    for (const t of pm.turns) {
+      expect(t.userNote).toBeNull();
+    }
   });
 });

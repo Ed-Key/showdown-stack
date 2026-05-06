@@ -154,6 +154,85 @@ export default defineContentScript({
       return total;
     }
 
+    // ---- Lead matrix: archetype detection + per-archetype lead pick ------
+    // Hand-tuned for the v2 Tyranitar team (Diancie/Heatran/Tyranitar/
+    // Gholdengo/Dragonite/Urshifu-Rapid-Strike). When opp archetype matches
+    // and our team has the suggested lead, returns {lead, reason, archetype};
+    // otherwise returns null and the panel falls back to the leadScore
+    // heuristic. See analysis/team-build/2026-04-29-natdex-team-v2-tyranitar.md §5.
+    const LM_RAIN = new Set(['pelipper']);
+    const LM_SUN = new Set(['torkoal', 'charizardmegay', 'ninetalesalola']);
+    const LM_ZOROARK = new Set(['zoroark', 'zoroarkhisui']);
+    const LM_TR = new Set(['hatterene', 'indeedeefemale', 'magearna', 'porygon2']);
+    const LM_STALL = new Set([
+      'alomomola', 'toxapex', 'chansey', 'blissey', 'clodsire',
+      'pecharunt', 'corviknight', 'gliscor', 'dondozo', 'ferrothorn',
+    ]);
+    const LM_HO = new Set([
+      'volcarona', 'ironvaliant', 'ceruledge', 'ogerponwellspring',
+      'dianciemega', 'diancie', 'gholdengo', 'ironbundle',
+    ]);
+    const LM_HAZARD_PAIRS: Array<Set<string>> = [
+      new Set(['garchomp', 'irontreads']),
+      new Set(['garchomp', 'landorustherian']),
+      new Set(['landorustherian', 'heatran']),
+    ];
+
+    function detectOppArchetype(oppSpeciesNorm: Set<string>): string {
+      const has = (set: Set<string>) => {
+        for (const s of set) if (oppSpeciesNorm.has(s)) return true;
+        return false;
+      };
+      const intersectCount = (set: Set<string>) => {
+        let n = 0;
+        for (const s of set) if (oppSpeciesNorm.has(s)) n++;
+        return n;
+      };
+      if (has(LM_RAIN)) return 'rain';
+      if (has(LM_SUN)) return 'sun';
+      if (has(LM_ZOROARK)) return 'zoroark_ho';
+      if (has(LM_TR)) return 'trick_room';
+      if (oppSpeciesNorm.has('tyranitar') && oppSpeciesNorm.has('excadrill')) return 'sand_ho';
+      if (intersectCount(LM_STALL) >= 3) return 'stall';
+      for (const pair of LM_HAZARD_PAIRS) {
+        let hits = 0;
+        for (const s of pair) if (oppSpeciesNorm.has(s)) hits++;
+        if (hits === pair.size) return 'hazard_stack';
+      }
+      if (intersectCount(LM_HO) >= 3) return 'hyper_offense';
+      return 'balance_or_unknown';
+    }
+
+    const LEAD_BY_ARCHETYPE: Record<string, { lead: string; reason: string }> = {
+      rain:                { lead: 'Tyranitar',   reason: 'Sand cancels rain on switch-in.' },
+      sun:                 { lead: 'Tyranitar',   reason: 'Sand cancels sun + Stone Edge OHKOs CharY (Rock 4x).' },
+      zoroark_ho:          { lead: 'Tyranitar',   reason: 'Pursuit traps Zoroark on Illusion-drop (Dark 2x).' },
+      trick_room:          { lead: 'Diancie',     reason: 'Magic Bounce + Diamond Storm chunks Hatterene/setup.' },
+      sand_ho:             { lead: 'Heatran',     reason: 'Magma Storm + Taunt blunts Excadrill setup.' },
+      stall:               { lead: 'Heatran',     reason: 'Magma Storm traps Alo/Toxapex; Taunt blocks recovery.' },
+      hazard_stack:        { lead: 'Diancie',     reason: 'Magic Bounce reflects opp rocks; Earth Power 2HKOs Heatran.' },
+      hyper_offense:       { lead: 'Diancie',     reason: 'Magic Bounce + Diamond Storm OHKOs +0 Volc.' },
+      balance_or_unknown:  { lead: 'Diancie',     reason: 'Default — Magic Bounce protects vs hazards.' },
+    };
+
+    function leadMatrixRecommendation(
+      myTeam: any[], oppTeam: any[]
+    ): { lead: string; reason: string; archetype: string; myMon: any } | null {
+      if (!myTeam.length || !oppTeam.length) return null;
+      const oppNorm = new Set(
+        oppTeam.map((p: any) => norm(p.species?.name || p.speciesForme || p.species || ''))
+      );
+      const archetype = detectOppArchetype(oppNorm);
+      const pick = LEAD_BY_ARCHETYPE[archetype];
+      if (!pick) return null;
+      const target = norm(pick.lead);
+      const myMon = myTeam.find(
+        (m: any) => norm(m.speciesForme || m.species || '') === target
+      );
+      if (!myMon) return null;  // user is on a different team — fall back to heuristic
+      return { lead: pick.lead, reason: pick.reason, archetype, myMon };
+    }
+
     // ---- translation: Showdown battle → poke-engine payload --------------
     function buildMyPokemon(p: any, activeMoves: any[] | null = null) {
       const speciesRaw = p.speciesForme || p.species;
@@ -269,14 +348,209 @@ export default defineContentScript({
       return out;
     }
 
-    function buildSide(mons: any[], activeIdx: number, boosts: any, rawSide: any, req: any = null) {
+    // Move IDs that share Showdown's Protect stall-counter mechanic. The
+    // engine's CONSECUTIVE_PROTECT_CHANCE = 1/3 applies to all of these,
+    // so every successful use of any of them stacks the same counter.
+    const PROTECT_FAMILY_MOVE_IDS = new Set([
+      'protect', 'detect', 'banefulbunker', 'burningbulwark', 'kingsshield',
+      'obstruct', 'silktrap', 'spikyshield', 'endure',
+    ]);
+
+    // Volatile statuses the engine actually models. Anything else from
+    // Showdown's `active.volatiles` map is dropped — sending unknowns wouldn't
+    // crash (engine's FromStr defaults to NONE) but pollutes the hashset and
+    // hides debugging signal. Keep this in sync with the variants listed in
+    // poke-engine `genx/state.rs:115-225`.
+    const ENGINE_VOLATILE_STATUSES = new Set([
+      'AQUARING', 'ATTRACT', 'BIDE', 'BOUNCE', 'CHARGE', 'CONFUSION',
+      'CURSE', 'DEFENSECURL', 'DESTINYBOND', 'DIG', 'DISABLE', 'DIVE',
+      'ELECTRIFY', 'ELECTROSHOT', 'EMBARGO', 'ENCORE', 'ENDURE',
+      'FLASHFIRE', 'FLINCH', 'FLY', 'FOCUSENERGY', 'FOLLOWME', 'FORESIGHT',
+      'FREEZESHOCK', 'GASTROACID', 'GEOMANCY', 'GLAIVERUSH', 'GRUDGE',
+      'HEALBLOCK', 'HELPINGHAND', 'ICEBURN', 'IMPRISON', 'INGRAIN',
+      'KINGSSHIELD', 'LASERFOCUS', 'LEECHSEED', 'LIGHTSCREEN', 'LOCKEDMOVE',
+      'MAGICCOAT', 'MAGNETRISE', 'MAXGUARD', 'METEORBEAM', 'MINIMIZE',
+      'MIRACLEEYE', 'MUSTRECHARGE', 'NIGHTMARE', 'NORETREAT', 'OCTOLOCK',
+      'PARTIALLYTRAPPED', 'PERISH4', 'PERISH3', 'PERISH2', 'PERISH1',
+      'PHANTOMFORCE', 'POWDER', 'POWERSHIFT', 'POWERTRICK', 'PROTECT',
+      'PROTOSYNTHESISATK', 'PROTOSYNTHESISDEF', 'PROTOSYNTHESISSPA',
+      'PROTOSYNTHESISSPD', 'PROTOSYNTHESISSPE', 'QUARKDRIVEATK',
+      'QUARKDRIVEDEF', 'QUARKDRIVESPA', 'QUARKDRIVESPD', 'QUARKDRIVESPE',
+      'RAGE', 'RAGEPOWDER', 'RAZORWIND', 'REFLECT', 'ROOST', 'SALTCURE',
+      'SHADOWFORCE', 'SKULLBASH', 'SKYATTACK', 'SKYDROP', 'SILKTRAP',
+      'SLOWSTART', 'SMACKDOWN', 'SNATCH', 'SOLARBEAM', 'SOLARBLADE',
+      'SPARKLINGARIA', 'SPIKYSHIELD', 'SPOTLIGHT', 'STOCKPILE',
+      'SUBSTITUTE', 'SYRUPBOMB', 'TARSHOT', 'TAUNT', 'TELEKINESIS',
+      'THROATCHOP', 'TRUANT', 'TORMENT', 'TYPECHANGE', 'UNBURDEN',
+      'UPROAR', 'YAWN',
+    ]);
+
+    // Volatiles that the engine REQUIRES additional companion fields for.
+    // Sending them without those fields panics the engine in MCTS rollouts.
+    //   - DISABLE  still needs the disabled-move reference, which we don't
+    //              currently surface, so keep filtering it out.
+    // ENCORE/TAUNT/YAWN/LOCKEDMOVE/CONFUSION/SLOWSTART are now unblocked
+    // because we wire `volatile_status_durations` (+ `last_used_move` for
+    // ENCORE) through to the engine in `buildSide` below.
+    const VOLATILE_STATUSES_REQUIRING_COMPANION_DATA = new Set([
+      'DISABLE',
+    ]);
+
+    // Showdown stores active-Pokemon volatiles as an object keyed by
+    // lowercase compact id (e.g. {taunt: [...], protosynthesisspe: [...]}).
+    // Map to the engine's uppercase enum names, dropping anything the engine
+    // doesn't model (formechange, typeadd, airballoon, transform, ...).
+    function extractVolatileStatuses(active: any): string[] {
+      const v = active?.volatiles;
+      if (!v || typeof v !== 'object') return [];
+      const out: string[] = [];
+      for (const key of Object.keys(v)) {
+        const upper = key.toUpperCase();
+        if (!ENGINE_VOLATILE_STATUSES.has(upper)) continue;
+        if (VOLATILE_STATUSES_REQUIRING_COMPANION_DATA.has(upper)) continue;
+        out.push(upper);
+      }
+      return out;
+    }
+
+    // Engine tick directions for `volatile_status_durations` (state.rs:723,
+    // genx/generate_instructions.rs:2086+/3263+/3187+). Values matter because
+    // the engine panics on out-of-range values:
+    //   taunt:      counts UP   — valid 0/1 (ticks to 2 → removed). Set to 1
+    //               while active.
+    //   yawn:       counts UP   — valid 0/1 (1 → puts target to sleep). Set
+    //               to 1 while active.
+    //   encore:     counts UP   — valid 0/1 (2 → removed). Set to 1 while
+    //               active. ENCORE additionally needs last_used_move.
+    //   lockedmove: counts UP   — valid 0/1 (2 → confused). Set to 1.
+    //   slowstart:  counts DOWN — 5..1 (0 → removed). Pass Showdown's
+    //               turnsLeft directly when present, else default 5.
+    //   confusion:  no panic on 0 but the engine increments for self-hits.
+    //               Set to 1 when active.
+    // Showdown's per-volatile value array is `[displayName, turnsLeft, ...]`
+    // — but turnsLeft is not always present. We default to safe values.
+    function extractVolatileDurations(active: any): {
+      confusion: number; encore: number; lockedmove: number;
+      slowstart: number; taunt: number; yawn: number;
+    } {
+      const out = {
+        confusion: 0, encore: 0, lockedmove: 0,
+        slowstart: 0, taunt: 0, yawn: 0,
+      };
+      const v = active?.volatiles;
+      if (!v || typeof v !== 'object') return out;
+      const readTurnsLeft = (key: string): number | null => {
+        const entry = v[key];
+        if (Array.isArray(entry) && typeof entry[1] === 'number') return entry[1];
+        return null;
+      };
+      if (v.taunt) out.taunt = 1;
+      if (v.yawn) out.yawn = 1;
+      if (v.encore) out.encore = 1;
+      if (v.lockedmove) out.lockedmove = 1;
+      if (v.confusion) out.confusion = 1;
+      if (v.slowstart) {
+        // SlowStart is a 5-turn countdown. Pass Showdown's reported
+        // turnsLeft when available; otherwise assume freshly applied (5).
+        const left = readTurnsLeft('slowstart');
+        out.slowstart = left != null && left > 0 ? left : 5;
+      }
+      return out;
+    }
+
+    // Compute consecutive successful Protect-family count for each side's
+    // active Pokemon by walking the canonical replay buffer. Showdown does
+    // NOT expose this in `request` JSON or in `sideConditions`, so we have
+    // to reconstruct it from the protocol stream.
+    //
+    // Counting rule (matches engine's `side_conditions.protect`):
+    //  - +1 on any successful Protect-family move
+    //  - reset to 0 on: switch/drag/replace, faint, non-protect move,
+    //    failed Protect (`|-fail|<actor>` immediately after the |move| line),
+    //    or `|cant|` (Pokemon couldn't move).
+    function computeProtectStreak(b: any): { p1: number; p2: number } {
+      const stepQueue: string[] = b?.stepQueue || [];
+      const streaks = { p1: 0, p2: 0 };
+      // Pre-scan to map (line index → line) so we can peek ahead for |-fail|.
+      for (let i = 0; i < stepQueue.length; i++) {
+        const line = stepQueue[i] || '';
+        const parts = line.split('|');
+        const kind = parts[1];
+        if (kind === 'switch' || kind === 'drag' || kind === 'replace') {
+          const actor = parts[2] || '';
+          const sideKey = actor.startsWith('p1') ? 'p1' : actor.startsWith('p2') ? 'p2' : null;
+          if (sideKey) streaks[sideKey] = 0;
+        } else if (kind === 'faint') {
+          const actor = parts[2] || '';
+          const sideKey = actor.startsWith('p1') ? 'p1' : actor.startsWith('p2') ? 'p2' : null;
+          if (sideKey) streaks[sideKey] = 0;
+        } else if (kind === 'cant') {
+          const actor = parts[2] || '';
+          const sideKey = actor.startsWith('p1') ? 'p1' : actor.startsWith('p2') ? 'p2' : null;
+          if (sideKey) streaks[sideKey] = 0;
+        } else if (kind === 'move') {
+          const actor = parts[2] || '';
+          const sideKey = actor.startsWith('p1') ? 'p1' : actor.startsWith('p2') ? 'p2' : null;
+          if (!sideKey) continue;
+          const moveId = norm(parts[3] || '');
+          if (PROTECT_FAMILY_MOVE_IDS.has(moveId)) {
+            // Look ahead within the same turn for an immediate |-fail| line
+            // attributed to this actor — that's how Showdown signals that
+            // the random stall-counter check failed.
+            let failed = false;
+            for (let j = i + 1; j < Math.min(i + 6, stepQueue.length); j++) {
+              const peek = stepQueue[j] || '';
+              const pp = peek.split('|');
+              if (pp[1] === 'turn' || pp[1] === 'move') break;  // next event boundary
+              if (pp[1] === '-fail' && (pp[2] || '').startsWith(sideKey)) {
+                failed = true;
+                break;
+              }
+            }
+            if (failed) streaks[sideKey] = 0;
+            else streaks[sideKey] += 1;
+          } else {
+            streaks[sideKey] = 0;
+          }
+        }
+      }
+      return streaks;
+    }
+
+    function buildSide(
+      mons: any[], activeIdx: number, boosts: any, rawSide: any,
+      req: any = null, protectStreak: number = 0,
+      activeVolatiles: string[] = [],
+      lastUsedMove: string = 'move:none',
+      activeVolatileDurations: {
+        confusion: number; encore: number; lockedmove: number;
+        slowstart: number; taunt: number; yawn: number;
+      } | null = null,
+    ) {
       const out = mons.slice();
       while (out.length < 6) out.push(emptyPokemon());
+      const sc = translateSideConditions(rawSide?.sideConditions);
+      // Override with the reconstructed streak — Showdown never sets this
+      // key on sideConditions, so the value coming out of translate is 0.
+      sc.protect = protectStreak;
+      // Substitute HP — Showdown does NOT expose live sub HP to spectators,
+      // so derive maxhp/4 (standard sub HP at creation) when the SUBSTITUTE
+      // volatile is set on the active Pokemon. Without this the engine
+      // treats moves as if no sub exists (Sub-Roost Dragonite, Sub-CM Latios,
+      // Sub-Toxic Gliscor were all being mis-evaluated). Engine reads via
+      // Side.substitute_health (state.rs:1002).
+      let substituteHealth: number | undefined;
+      if (activeVolatiles.includes('SUBSTITUTE')) {
+        const activeMaxhp = out[activeIdx]?.maxhp || 0;
+        if (activeMaxhp > 0) {
+          substituteHealth = Math.floor(activeMaxhp / 4);
+        }
+      }
       return {
         pokemon: out.slice(0, 6),
         activeIndex: activeIdx,
-        sideConditions: translateSideConditions(rawSide?.sideConditions),
-        volatileStatuses: [],
+        sideConditions: sc,
+        volatileStatuses: activeVolatiles,
         boosts: {
           attack: boosts?.atk || 0,
           defense: boosts?.def || 0,
@@ -285,7 +559,32 @@ export default defineContentScript({
           speed: boosts?.spe || 0,
         },
         forceTrapped: !!req?.active?.[0]?.trapped,
+        lastUsedMove,
+        ...(substituteHealth !== undefined ? { substituteHealth } : {}),
+        ...(activeVolatileDurations !== null
+          ? { volatileStatusDurations: activeVolatileDurations }
+          : {}),
       };
+    }
+
+    // Derive the LastUsedMove string for the engine schema by looking up
+    // the active Pokemon's most recently used move against the moves[]
+    // array we've already built. The engine's `LastUsedMove::deserialize`
+    // (state.rs:63-76) accepts:
+    //   - `move:<idx>` — index 0..3 into the active's moves[]
+    //   - `switch:<idx>` — pokemon index in team
+    //   - `move:none`   — nothing previous (note: bare `none` panics)
+    // First-cut: only emit move:<idx>; default to move:none for switches
+    // or unknown. That's a safe default that doesn't trigger choice-lock
+    // logic incorrectly.
+    function deriveLastUsedMove(active: any, builtMons: any[], activeIdx: number): string {
+      const lastMoveId = norm(active?.lastMove?.id || '');
+      if (!lastMoveId) return 'move:none';
+      const activeMon = builtMons[activeIdx];
+      if (!activeMon || !Array.isArray(activeMon.moves)) return 'move:none';
+      const idx = activeMon.moves.findIndex((m: any) => norm(m?.id || '') === lastMoveId);
+      if (idx < 0 || idx > 3) return 'move:none';
+      return `move:${idx}`;
     }
 
     // ---- Phase 2: priority-move lookup + speed-modifier chain --------
@@ -526,14 +825,51 @@ export default defineContentScript({
         if (oppActiveIdx < 0) oppActiveIdx = 0;
       }
       const weather = (b.weather || '').toLowerCase();
+      // Reconstruct each side's consecutive Protect-family count from the
+      // protocol stream — Showdown does NOT expose this in `request` JSON.
+      // Engine uses (1/3)^N for the next attempt's success chance.
+      const protectStreaks = computeProtectStreak(b);
+      const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
+      const myStreak = mySideId === 'p2' ? protectStreaks.p2 : protectStreaks.p1;
+      const oppStreak = mySideId === 'p2' ? protectStreaks.p1 : protectStreaks.p2;
+      // Active-Pokemon volatile statuses — was hardcoded `[]` so the engine
+      // was blind to Taunt, Encore, Substitute, Booster Energy direction
+      // (Protosynthesis/Quark Drive), Locked Move (Outrage), Slow Start,
+      // Leech Seed, Magma Storm trap, etc. (P0 audit finding 2026-04-29.)
+      const myVolatiles = extractVolatileStatuses(myActive);
+      const oppVolatiles = extractVolatileStatuses(oppActive);
+      // last_used_move — gives engine choice-lock memory (Scarf Urshifu
+      // locked into Surging Strikes, CB Dragonite locked into Outrage,
+      // etc.). Without this the engine treats all 4 moves as legal.
+      const myLastUsed = deriveLastUsedMove(myActive, myMons, myActiveIdx);
+      const oppLastUsed = deriveLastUsedMove(oppActive, oppMons, oppActiveIdx);
+      // volatile_status_durations — engine panics if TAUNT/YAWN/ENCORE/
+      // LOCKEDMOVE are set with a 0 counter; SLOWSTART needs a >0 counter
+      // for the wears-off tick to run. Required to lift the previous
+      // companion-data filter on those volatiles.
+      const myDurations = extractVolatileDurations(myActive);
+      const oppDurations = extractVolatileDurations(oppActive);
       return {
-        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide, req),
-        sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide),
+        sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide, req, myStreak, myVolatiles, myLastUsed, myDurations),
+        sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide, null, oppStreak, oppVolatiles, oppLastUsed, oppDurations),
         weather: {
           weatherType: weather || 'none',
-          turnsRemaining: b.weatherTimeLeft || -1,
+          // Preserve 0 (last turn of weather); only fall back to -1 when truly absent.
+          turnsRemaining: typeof b.weatherTimeLeft === 'number' ? b.weatherTimeLeft : -1,
         },
-        terrain: { terrainType: 'none', turnsRemaining: -1 },
+        terrain: (() => {
+          const t = detectTerrain(b);
+          if (!t) return { terrainType: 'none', turnsRemaining: -1 };
+          // Engine's Terrain enum has no underscore (ELECTRICTERRAIN, not
+          // ELECTRIC_TERRAIN); detectTerrain returns the underscore form for
+          // _planH.terrain compatibility, so strip it before sending here.
+          const tId = t.toLowerCase().replace('_', '');
+          const entry = (b.pseudoWeather || []).find(
+            (pw: any) => (pw?.[0] || '').toString().toLowerCase() === tId,
+          );
+          const turns = typeof entry?.[2] === 'number' ? entry[2] : 5;
+          return { terrainType: t.replace('_', ''), turnsRemaining: turns };
+        })(),
         trickRoom: (b.pseudoWeather || []).some((pw: any) => pw[0] === 'trickroom'),
         timeLimitMs: ANALYSIS_TIME_MS,
         updateIntervalMs: UPDATE_INTERVAL_MS,
@@ -545,10 +881,13 @@ export default defineContentScript({
     panel.id = 'sc-panel';
     panel.innerHTML = [
       '<div class="sc-header">Copilot — idle</div>',
+      '<div class="sc-lead-matrix" style="display:none"></div>',
       '<div class="sc-best">—</div>',
       '<div class="sc-stats">—</div>',
       '<div class="sc-pv">PV: —</div>',
       '<div class="sc-alts">—</div>',
+      '<div class="sc-notes-header" title="Battle note (press N for per-turn notes)">📝 Battle note <span class="sc-notes-toggle">[show]</span></div>',
+      '<div class="sc-notes-body" style="display:none"><textarea class="sc-battle-note" placeholder="Free-form notes for this battle..." spellcheck="false"></textarea></div>',
     ].join('');
 
     const style = document.createElement('style');
@@ -563,19 +902,207 @@ export default defineContentScript({
         user-select: none;
       }
       #sc-panel .sc-header { font-weight: bold; margin-bottom: 6px; color: #4af; }
+      #sc-panel .sc-lead-matrix {
+        font-size: 11px; color: #fc6; margin: -2px 0 6px 0;
+        padding: 4px 6px; border-left: 2px solid #fc6;
+        background: rgba(255,200,80,0.08); word-break: break-word;
+      }
       #sc-panel .sc-best { font-size: 17px; font-weight: bold; color: #7fe; margin: 4px 0; }
       #sc-panel .sc-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
       #sc-panel .sc-pv { font-size: 11px; color: #ddd; margin-bottom: 4px; word-break: break-word; }
       #sc-panel .sc-alts { font-size: 11px; color: #ccc; word-break: break-word; }
+      #sc-panel .sc-notes-header {
+        font-size: 11px; color: #fc6; margin-top: 8px; cursor: pointer;
+        border-top: 1px dashed #333; padding-top: 6px;
+      }
+      #sc-panel .sc-notes-toggle { color: #888; font-style: italic; margin-left: 4px; }
+      #sc-panel .sc-notes-body { margin-top: 4px; }
+      #sc-panel .sc-battle-note {
+        width: 100%; box-sizing: border-box;
+        background: #0e0e0e; color: #ddd; border: 1px solid #333;
+        border-radius: 4px; padding: 4px 6px;
+        font: inherit; font-size: 11px; min-height: 40px; max-height: 200px;
+        resize: vertical;
+      }
+      #sc-note-modal {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.6); display: none;
+        align-items: center; justify-content: center;
+        z-index: 2147483646;
+      }
+      #sc-note-modal.visible { display: flex; }
+      #sc-note-modal .sc-note-box {
+        background: #1a1a1a; border: 2px solid #4af; border-radius: 6px;
+        padding: 14px 18px; min-width: 380px;
+        font-family: ui-monospace, "Menlo", monospace;
+      }
+      #sc-note-modal .sc-note-label {
+        color: #4af; font-size: 12px; font-weight: bold; margin-bottom: 6px;
+      }
+      #sc-note-modal .sc-note-input {
+        width: 100%; box-sizing: border-box;
+        background: #0e0e0e; color: #eee; border: 1px solid #333;
+        border-radius: 4px; padding: 6px 8px;
+        font: inherit; font-size: 13px;
+      }
+      #sc-note-modal .sc-note-hint {
+        color: #888; font-size: 10px; margin-top: 6px;
+      }
     `;
     document.head.appendChild(style);
     document.body.appendChild(panel);
 
     const hdrEl = panel.querySelector<HTMLDivElement>('.sc-header')!;
+    const leadMatrixEl = panel.querySelector<HTMLDivElement>('.sc-lead-matrix')!;
     const bestEl = panel.querySelector<HTMLDivElement>('.sc-best')!;
     const statsEl = panel.querySelector<HTMLDivElement>('.sc-stats')!;
     const pvEl = panel.querySelector<HTMLDivElement>('.sc-pv')!;
     const altsEl = panel.querySelector<HTMLDivElement>('.sc-alts')!;
+    const notesHeaderEl = panel.querySelector<HTMLDivElement>('.sc-notes-header')!;
+    const notesBodyEl = panel.querySelector<HTMLDivElement>('.sc-notes-body')!;
+    const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
+    const battleNoteTextarea = panel.querySelector<HTMLTextAreaElement>('.sc-battle-note')!;
+
+    // ---- Annotation feature ---------------------------------------------
+    // Per-turn notes (keyboard 'N') + per-battle freeform notes (textarea).
+    // Stored under sc:turn-notes:<battleId> and sc:battle-note:<battleId>
+    // during play; merged into the final post-mortem at persist time.
+    // Also fire-and-forget POSTed to the proxy at /annotation so they
+    // land on disk at analysis/play-notes/YYYY-MM-DD.jsonl independently
+    // of localStorage capture.
+    const PROXY_NOTE_URL = 'http://localhost:7271/annotation';
+
+    // Updated on every engine tick so the keyboard handler always knows
+    // the current battle. null if no live battle.
+    const annotationState: { battleId: string | null; turn: number } = {
+      battleId: null,
+      turn: 0,
+    };
+
+    function readTurnNotes(battleId: string): Record<string, string> {
+      try {
+        return JSON.parse(localStorage.getItem(`sc:turn-notes:${battleId}`) || '{}');
+      } catch {
+        return {};
+      }
+    }
+    function writeTurnNote(battleId: string, turn: number, text: string): void {
+      const notes = readTurnNotes(battleId);
+      if (text.trim() === '') delete notes[String(turn)];
+      else notes[String(turn)] = text;
+      localStorage.setItem(`sc:turn-notes:${battleId}`, JSON.stringify(notes));
+    }
+    function readBattleNote(battleId: string): string {
+      return localStorage.getItem(`sc:battle-note:${battleId}`) || '';
+    }
+    function writeBattleNote(battleId: string, text: string): void {
+      if (text === '') localStorage.removeItem(`sc:battle-note:${battleId}`);
+      else localStorage.setItem(`sc:battle-note:${battleId}`, text);
+    }
+    function postAnnotation(payload: {
+      battleId: string;
+      turn: number;
+      kind: 'turn' | 'battle';
+      text: string;
+    }): void {
+      // Fire-and-forget — do not block UX. localStorage is the fallback.
+      fetch(PROXY_NOTE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, timestampMs: Date.now() }),
+        keepalive: true,
+      }).catch(() => { /* proxy down — localStorage still has it */ });
+    }
+
+    // Modal overlay (separate from panel so z-index / centering works cleanly)
+    const noteModal = document.createElement('div');
+    noteModal.id = 'sc-note-modal';
+    noteModal.innerHTML = [
+      '<div class="sc-note-box">',
+      '  <div class="sc-note-label">Note for T<span class="sc-note-turn">?</span>:</div>',
+      '  <input type="text" class="sc-note-input" maxlength="500" placeholder="What did you notice?" />',
+      '  <div class="sc-note-hint">Enter to save · Esc to cancel</div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(noteModal);
+    const noteModalTurnEl = noteModal.querySelector<HTMLSpanElement>('.sc-note-turn')!;
+    const noteModalInput = noteModal.querySelector<HTMLInputElement>('.sc-note-input')!;
+
+    function openNoteModal(): void {
+      if (!annotationState.battleId) return;
+      const turn = annotationState.turn;
+      noteModalTurnEl.textContent = String(turn);
+      const existing = readTurnNotes(annotationState.battleId)[String(turn)] || '';
+      noteModalInput.value = existing;
+      noteModal.classList.add('visible');
+      noteModalInput.focus();
+      noteModalInput.select();
+    }
+    function closeNoteModal(): void {
+      noteModal.classList.remove('visible');
+      noteModalInput.value = '';
+    }
+    function saveNoteFromModal(): void {
+      const battleId = annotationState.battleId;
+      if (!battleId) { closeNoteModal(); return; }
+      const turn = annotationState.turn;
+      const text = noteModalInput.value.trim();
+      writeTurnNote(battleId, turn, text);
+      if (text) postAnnotation({ battleId, turn, kind: 'turn', text });
+      closeNoteModal();
+    }
+
+    noteModalInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveNoteFromModal();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeNoteModal();
+      }
+      e.stopPropagation();
+    });
+
+    // Global keyboard handler — opens modal on plain 'n' key when no input
+    // is focused. Wrapped in capture-phase to avoid Showdown handlers eating it.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'n' && e.key !== 'N') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const ae = document.activeElement;
+      const tag = (ae?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (ae as HTMLElement)?.isContentEditable) return;
+      if (!annotationState.battleId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openNoteModal();
+    }, true);
+
+    // Per-battle note: collapsible textarea + autosave (debounced 600ms).
+    let battleNoteSaveTimer: number | null = null;
+    notesHeaderEl.addEventListener('click', () => {
+      const showing = notesBodyEl.style.display !== 'none';
+      notesBodyEl.style.display = showing ? 'none' : 'block';
+      notesToggleEl.textContent = showing ? '[show]' : '[hide]';
+    });
+    battleNoteTextarea.addEventListener('input', () => {
+      const battleId = annotationState.battleId;
+      if (!battleId) return;
+      if (battleNoteSaveTimer !== null) clearTimeout(battleNoteSaveTimer);
+      battleNoteSaveTimer = window.setTimeout(() => {
+        const text = battleNoteTextarea.value;
+        writeBattleNote(battleId, text);
+        if (text.trim()) postAnnotation({ battleId, turn: 0, kind: 'battle', text });
+      }, 600);
+    });
+
+    // When the active battle changes, swap textarea contents to that battle's note.
+    let lastAnnotationBattleId: string | null = null;
+    function syncBattleNoteUi(): void {
+      const battleId = annotationState.battleId;
+      if (battleId === lastAnnotationBattleId) return;
+      lastAnnotationBattleId = battleId;
+      battleNoteTextarea.value = battleId ? readBattleNote(battleId) : '';
+    }
 
     // ---- Battle history (for post-game analysis) ------------------------
     type DecisionRecord = {
@@ -603,6 +1130,15 @@ export default defineContentScript({
     const dumpedBattleIds = new Set<string>();
 
     function persistPostMortem(pm: BattlePostMortem): void {
+      // Overlay any in-battle annotations from temp localStorage keys
+      // onto the parsed post-mortem before persisting.
+      const turnNotes = readTurnNotes(pm.battleId);
+      const battleNote = readBattleNote(pm.battleId);
+      if (battleNote) pm.battleNote = battleNote;
+      for (const t of pm.turns) {
+        const note = turnNotes[String(t.turn)];
+        if (note) t.userNote = note;
+      }
       const key = `sc:postmortem:${pm.battleId}`;
       const json = JSON.stringify(pm);
       try {
@@ -930,7 +1466,7 @@ export default defineContentScript({
         if (!k || !k.startsWith('sc:postmortem:')) continue;
         try {
           const pm = JSON.parse(localStorage.getItem(k) || '');
-          if (pm?.schemaVersion !== 2) continue;
+          if (!pm || typeof pm.schemaVersion !== 'number' || pm.schemaVersion < 2) continue;
           out.push(pm as BattlePostMortem);
         } catch {}
       }
@@ -1042,6 +1578,11 @@ export default defineContentScript({
       }
       const b = br.battle;
       const t = b.turn || 0;
+      // Annotation state — kept in sync so the keyboard handler always knows
+      // current battleId + turn. Sync the per-battle note UI on battle switch.
+      annotationState.battleId = br.id || null;
+      annotationState.turn = t;
+      syncBattleNoteUi();
       // Detect battle ending so we can log an end-of-battle summary exactly once.
       if (b.ended && lastEndedBattleId !== br.id) {
         lastEndedBattleId = br.id;
@@ -1077,7 +1618,7 @@ export default defineContentScript({
       }
       if (key === lastKey) { trace(`cache-skip key=${key}`); return; }
 
-      // Team Preview: run the fast heuristic (no engine call)
+      // Team Preview: lead matrix first, type-heuristic as fallback (no engine call)
       if (req?.teamPreview) {
         const myTeam = b.myPokemon || [];
         const oppTeam = b.farSide?.pokemon || [];
@@ -1088,15 +1629,45 @@ export default defineContentScript({
               score: leadScore(m, oppTeam),
             }))
             .sort((a: any, b: any) => b.score - a.score);
-          const best = ranked[0];
+          const matrix = leadMatrixRecommendation(myTeam, oppTeam);
           hdrEl.textContent = 'Copilot — team preview';
-          bestEl.textContent = `→ ${best.name}`;
-          statsEl.textContent = `matchup score ${best.score.toFixed(1)} across ${oppTeam.length} opps`;
-          pvEl.textContent = 'PV: heuristic (not MCTS)';
-          altsEl.textContent = ranked
-            .slice(1, 4)
-            .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
-            .join(' | ');
+          if (matrix) {
+            // Display name in mega form when leading Diancie (the matrix's
+            // suggested form) — base form is what's in BattleRequest, but
+            // the user sees "Diancie-Mega" in the team builder.
+            const display = matrix.lead === 'Diancie' ? 'Diancie-Mega' : matrix.lead;
+            // Sticky line — survives subsequent turn renders so the user can
+            // refer back to the lead-matrix call mid-battle. Cleared on
+            // battle change via the post-match deinit (see scHistory reset).
+            leadMatrixEl.textContent = `Lead matrix: → ${display} · opp = ${matrix.archetype.replace(/_/g, ' ')} · ${matrix.reason}`;
+            leadMatrixEl.style.display = 'block';
+            console.log('[sc:lead-matrix]', {
+              archetype: matrix.archetype, lead: display, reason: matrix.reason,
+              oppTeam: oppTeam.map((p: any) => p.species?.name || p.speciesForme || p.species),
+            });
+            bestEl.textContent = `→ ${display}`;
+            statsEl.textContent = `opp archetype: ${matrix.archetype.replace(/_/g, ' ')} · matrix lead`;
+            pvEl.textContent = `Why: ${matrix.reason}`;
+            altsEl.textContent = 'heuristic ranks: ' + ranked
+              .slice(0, 3)
+              .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
+              .join(' | ');
+          } else {
+            // No archetype match — show heuristic, hide sticky matrix line.
+            leadMatrixEl.style.display = 'none';
+            console.log('[sc:lead-matrix]', {
+              archetype: 'no-match',
+              oppTeam: oppTeam.map((p: any) => p.species?.name || p.speciesForme || p.species),
+            });
+            const best = ranked[0];
+            bestEl.textContent = `→ ${best.name}`;
+            statsEl.textContent = `matchup score ${best.score.toFixed(1)} across ${oppTeam.length} opps · type heuristic`;
+            pvEl.textContent = 'PV: heuristic (no archetype match)';
+            altsEl.textContent = ranked
+              .slice(1, 4)
+              .map((r: any) => `${r.name} (${r.score.toFixed(1)})`)
+              .join(' | ');
+          }
           lastKey = key; // done — opp data was ready
         } else {
           // Not ready: opp preview not loaded yet. DON'T cache — retry next poll.

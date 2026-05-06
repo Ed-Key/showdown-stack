@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import logging
 from collections import OrderedDict
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -29,7 +31,7 @@ from showdown_copilot.priors import PriorsSource
 logger = logging.getLogger(__name__)
 
 # --- Config ---
-ENGINE_URL = "http://localhost:7267"
+ENGINE_URL = "http://localhost:7270"  # Plan I live testing 2026-04-30; revert to 7267 for baseline
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = 7271
 DEFAULT_FORMAT = "gen9ou"
@@ -66,6 +68,14 @@ _FORMAT_ALIASES: dict[str, list[str]] = {
     "gen9nationaldexubers": ["gen9nationaldexag"],
     "gen9ag": ["gen9nationaldexag"],
 }
+
+# Formats that ban Terastallization (Smogon OU + NatDex OU as of late 2025).
+# Compared against the *original* normalized format, not the chaos-fallback alias —
+# AG-aliased lookups still inherit the original format's ban rules.
+_TERA_BANNED_FORMATS: frozenset[str] = frozenset({
+    "gen9ou",
+    "gen9nationaldex",
+})
 
 
 def _normalize(name: str) -> str:
@@ -340,6 +350,16 @@ def apply_belief(req: dict[str, Any]) -> dict[str, Any]:
     # Re-normalize keys defensively in case the extension sent display-form names.
     revealed_moves = {_normalize(k): list(v) for k, v in raw_reveals.items()}
 
+    # Format-level Tera ban: signal to the engine so it stops searching
+    # MoveTera options (~15-20% of root branching factor wasted otherwise).
+    # Allow the extension to override via `_planH.teraBanned`; otherwise
+    # derive from the format itself.
+    extension_override = meta.get("teraBanned")
+    if extension_override is not None:
+        req["teraBanned"] = bool(extension_override)
+    else:
+        req["teraBanned"] = fmt in _TERA_BANNED_FORMATS
+
     if not battle_id:
         logger.warning("_planH missing battleId; skipping belief overlay")
         return req
@@ -447,6 +467,40 @@ async def healthz() -> JSONResponse:
             "engine_url": ENGINE_URL,
         }
     )
+
+
+# Where note-disk syncs land. Path is relative to the workspace repo so notes
+# live alongside battle postmortems and other analysis artifacts. The dir is
+# created on first write.
+_NOTES_DIR = Path(
+    "/Users/edkiboma/Projects/pokemon-ai/workspace/analysis/play-notes"
+)
+
+
+@app.post("/annotation")
+async def save_annotation(req: Request) -> JSONResponse:
+    """Append a user annotation to today's JSONL file.
+
+    Body schema: {battleId: str, turn: int, kind: "turn"|"battle",
+                  text: str, timestampMs: int}.
+
+    File: {NOTES_DIR}/{YYYY-MM-DD}.jsonl, one note per line. Append-only;
+    UTF-8; never overwrites existing entries. Fire-and-forget from the
+    extension side — failures here don't affect localStorage capture.
+    """
+    body: dict[str, Any] = await req.json()
+    # Trust input — extension is local, format is fixed. Sanity checks only.
+    if not isinstance(body.get("battleId"), str) or not body["battleId"]:
+        return JSONResponse({"ok": False, "error": "missing battleId"}, status_code=400)
+    if body.get("kind") not in ("turn", "battle"):
+        return JSONResponse({"ok": False, "error": "bad kind"}, status_code=400)
+
+    date = datetime.now().strftime("%Y-%m-%d")
+    out = _NOTES_DIR / f"{date}.jsonl"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(body, ensure_ascii=False) + "\n")
+    return JSONResponse({"ok": True})
 
 
 def main() -> None:
