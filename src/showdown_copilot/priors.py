@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from showdown_copilot.models import ModalSet
+from showdown_copilot.models import Distributions, ModalSet
 from showdown_copilot.stats import _NATURE_TO_SPE_MULT, compute_speed_stat
 
 if TYPE_CHECKING:
@@ -55,6 +55,15 @@ def _top_key(d: dict[str, float]) -> str | None:
     if not d:
         return None
     return max(d.items(), key=lambda kv: kv[1])[0]
+
+
+def _normalize_dist(d: dict[str, float]) -> dict[str, float]:
+    """Normalize a name → weight dict so values sum to 1.0. Empty dict
+    returns empty dict. Non-positive total returns empty dict."""
+    total = sum(v for v in d.values() if v > 0)
+    if total <= 0:
+        return {}
+    return {k: v / total for k, v in d.items() if v > 0}
 
 
 def _top_n_keys(d: dict[str, float], n: int) -> list[str]:
@@ -184,6 +193,22 @@ class PriorsSource:
             weight_kg=0.0,
         )
 
+    def _lookup_entry(
+        self, species: str, fmt: str, team_type: str | None = None
+    ) -> dict | None:
+        """Resolve a chaos entry for `species` in `fmt`. Tries typed key
+        for monotype formats, then falls back to plain species. Returns
+        None if no entry exists.
+        """
+        chaos = self._ensure_loaded(fmt)
+        data = chaos.get("data", {})
+        entry = None
+        if team_type and fmt.startswith("gen9monotype"):
+            entry = data.get(f"{species} ({team_type})")
+        if entry is None:
+            entry = data.get(species)
+        return entry
+
     def get_set(
         self,
         species: str,
@@ -191,16 +216,7 @@ class PriorsSource:
         team_type: str | None = None,
         belief: "OpponentBelief | None" = None,
     ) -> ModalSet:
-        chaos = self._ensure_loaded(format)
-        data = chaos.get("data", {})
-
-        # Try typed key first (e.g. "Kingambit (Dark)")
-        entry = None
-        if team_type and format.startswith("gen9monotype"):
-            entry = data.get(f"{species} ({team_type})")
-        # Fall back to plain species
-        if entry is None:
-            entry = data.get(species)
+        entry = self._lookup_entry(species, format, team_type)
         if entry is None:
             logger.warning(
                 "no chaos entry for %s (type=%s) in %s — returning neutral default",
@@ -223,6 +239,49 @@ class PriorsSource:
             )
 
         return self._modal_set_from_entry(species, entry)
+
+    def get_distributions(
+        self,
+        species: str,
+        fmt: str,
+        belief: "OpponentBelief | None" = None,
+        team_type: str | None = None,
+    ) -> Distributions | None:
+        """Return belief-filtered chaos distributions for a species.
+
+        Mirrors the filtering logic of get_set() but returns the post-filter
+        dicts (normalized to probabilities) instead of reducing to top-1.
+        Used by the /belief endpoint to expose probabilities to the extension.
+
+        Returns None if no chaos entry exists for `species` in `fmt`.
+        """
+        entry = self._lookup_entry(species, fmt, team_type)
+        if entry is None:
+            return None
+
+        if belief is not None:
+            items = self._filter_items(entry.get("Items", {}), belief)
+            abilities = self._filter_abilities(entry.get("Abilities", {}), belief)
+            spreads = self._filter_spreads(
+                entry.get("Spreads", {}) or {}, species, belief,
+            )
+        else:
+            items = dict(entry.get("Items", {}))
+            abilities = dict(entry.get("Abilities", {}))
+            spreads = dict(entry.get("Spreads", {}) or {})
+
+        # Moves are not reduced — UI shows the full distribution.
+        moves = dict(entry.get("Moves", {}))
+        # Tera not belief-filtered per existing convention.
+        tera = dict(entry.get("Tera Types", {}))
+
+        return Distributions(
+            moves=_normalize_dist(moves),
+            items=_normalize_dist(items),
+            abilities=_normalize_dist(abilities),
+            spreads=_normalize_dist(spreads),
+            tera_types=_normalize_dist(tera),
+        )
 
     def _modal_set_from_entry(self, species: str, entry: dict) -> ModalSet:
         """Existing modal-pick logic, factored out so the belief-aware
@@ -253,6 +312,60 @@ class PriorsSource:
             weight_kg=0.0,
         )
 
+    def _filter_items(
+        self, raw_items: dict[str, float], belief: "OpponentBelief"
+    ) -> dict[str, float]:
+        """Apply belief constraints to a chaos Items distribution.
+
+        Honors revealed_item, impossible_items, and item_inferred_choicescarf.
+        Returns the filtered raw-weight dict (callers normalize if needed).
+        """
+        out = {
+            k: v for k, v in raw_items.items()
+            if _normalize(k) not in belief.impossible_items
+            and (belief.revealed_item is None or _normalize(k) == belief.revealed_item)
+        }
+        # Bracket math forced Choice Scarf (e.g. opp moved first against a
+        # fully-modified speed too high for any non-scarf bracket). Hard-lock
+        # so non-scarf items can't win the modal pick. infer_choicescarf
+        # already poisons the Choice trio via impossible_items, but Life Orb /
+        # Z-Crystal / Boots would still pass that filter without this lock.
+        if belief.item_inferred_choicescarf and belief.revealed_item is None:
+            out = {k: v for k, v in out.items() if _normalize(k) == "choicescarf"}
+        return out
+
+    def _filter_abilities(
+        self, raw_abilities: dict[str, float], belief: "OpponentBelief"
+    ) -> dict[str, float]:
+        """Apply belief constraints to a chaos Abilities distribution.
+
+        Honors revealed_ability and impossible_abilities. Returns the filtered
+        raw-weight dict.
+        """
+        return {
+            k: v for k, v in raw_abilities.items()
+            if _normalize(k) not in belief.impossible_abilities
+            and (belief.revealed_ability is None or _normalize(k) == belief.revealed_ability)
+        }
+
+    def _filter_spreads(
+        self, raw_spreads: dict[str, float], species: str, belief: "OpponentBelief"
+    ) -> dict[str, float]:
+        """Apply belief.speed_range to a chaos Spreads distribution.
+
+        When speed_range is None or base_speed unknown, returns the input
+        unchanged. Returns the filtered raw-weight dict.
+        """
+        if belief.speed_range is None:
+            return dict(raw_spreads)
+        base_speed = _get_base_speeds().get(_normalize(species))
+        if base_speed is None:
+            return dict(raw_spreads)
+        return {
+            k: v for k, v in raw_spreads.items()
+            if _spread_consistent_with_speed(k, base_speed, belief)
+        }
+
     def _modal_set_from_consistent_candidates(
         self, species: str, entry: dict, belief: "OpponentBelief"
     ) -> ModalSet | None:
@@ -269,31 +382,11 @@ class PriorsSource:
         fall back to unfiltered modal). Returns a ModalSet built from the
         modal pick over the FILTERED candidate distributions otherwise.
         """
-        # Items: filter the chaos Items distribution
-        items_dist = {
-            k: v for k, v in entry.get("Items", {}).items()
-            if _normalize(k) not in belief.impossible_items
-            and (belief.revealed_item is None or _normalize(k) == belief.revealed_item)
-        }
-        # Bracket math forced Choice Scarf (e.g. opp moved first against a
-        # fully-modified speed too high for any non-scarf bracket). Hard-lock
-        # the modal item to choicescarf so non-scarf items (Life Orb, etc.)
-        # can't win the modal pick. infer_choicescarf already poisons the
-        # Choice trio via impossible_items, but Life Orb / Z-Crystal / Boots
-        # would still pass that filter without this lock.
-        if belief.item_inferred_choicescarf and belief.revealed_item is None:
-            items_dist = {
-                k: v for k, v in items_dist.items() if _normalize(k) == "choicescarf"
-            }
+        items_dist = self._filter_items(entry.get("Items", {}), belief)
         if not items_dist:
             return None  # no consistent item
 
-        # Abilities: same filter
-        abilities_dist = {
-            k: v for k, v in entry.get("Abilities", {}).items()
-            if _normalize(k) not in belief.impossible_abilities
-            and (belief.revealed_ability is None or _normalize(k) == belief.revealed_ability)
-        }
+        abilities_dist = self._filter_abilities(entry.get("Abilities", {}), belief)
         if not abilities_dist:
             return None  # no consistent ability
 
@@ -315,16 +408,9 @@ class PriorsSource:
         # When the filter empties the distribution, return None to trigger
         # fall-through to the unfiltered modal path (consistent with the
         # items / abilities / moves filter behavior above).
-        spreads_dist: dict[str, float] = entry.get("Spreads", {}) or {}
-        if belief.speed_range is not None:
-            base_speed = _get_base_speeds().get(_normalize(species))
-            if base_speed is not None:
-                spreads_dist = {
-                    k: v for k, v in spreads_dist.items()
-                    if _spread_consistent_with_speed(k, base_speed, belief)
-                }
-                if not spreads_dist:
-                    return None
+        spreads_dist = self._filter_spreads(entry.get("Spreads", {}) or {}, species, belief)
+        if belief.speed_range is not None and not spreads_dist:
+            return None
         spread_key = _top_key(spreads_dist)
         if spread_key:
             nature, evs = _parse_spread(spread_key)

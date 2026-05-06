@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from showdown_copilot.belief import BeliefTracker, OpponentBelief
+from showdown_copilot.models import Distributions
 from showdown_copilot.priors import (
     PriorsSource,
     _weighted_pick,
@@ -386,3 +387,53 @@ def test_get_set_revealed_ability_overrides_R5_impossible_abilities(tmp_path):
         "discard fix, R5's eager rule-out would harm modal selection "
         "on every Pokemon whose ability gets revealed"
     )
+
+
+@pytest.fixture
+def mini_chaos_natdex_priors(tmp_path):
+    """A PriorsSource backed by a tiny gen9nationaldexag chaos JSON
+    containing Garchomp with multiple plausible items/abilities/moves.
+
+    Values are already probabilities (decimal weights), matching how
+    the real natdex chaos cache hack stores them after synthesis.
+    """
+    data = {
+        "data": {
+            "Garchomp": {
+                "Moves": {
+                    "earthquake": 0.50,
+                    "stoneedge": 0.30,
+                    "swordsdance": 0.20,
+                    "scaleshot": 0.18,
+                    "stealthrock": 0.15,
+                },
+                "Items": {
+                    "rockyhelmet": 0.40,
+                    "choiceband": 0.25,
+                    "lifeorb": 0.20,
+                    "leftovers": 0.15,
+                },
+                "Abilities": {"roughskin": 0.90, "sandveil": 0.10},
+                "Spreads": {"Adamant:0/252/0/0/4/252": 0.80},
+                "Tera Types": {"Steel": 0.50, "Fire": 0.30, "Ground": 0.20},
+            }
+        }
+    }
+    fake = tmp_path / "gen9nationaldexag-1500.json"
+    fake.write_text(json.dumps(data))
+    return PriorsSource(cache_dir=tmp_path, rating=1500, month="2026-04")
+
+
+def test_get_distributions_filters_by_belief_and_returns_full_dists(mini_chaos_natdex_priors):
+    src = mini_chaos_natdex_priors
+    belief = OpponentBelief(species="garchomp")
+    belief.revealed_item = "choiceband"
+    dists = src.get_distributions("Garchomp", "gen9nationaldexag", belief=belief)
+    assert dists is not None
+    # revealed_item locks items distribution to {choiceband: 1.0}
+    assert dists.items == {"choiceband": 1.0}
+    # moves dist still shows all chaos options (none impossible)
+    assert "earthquake" in dists.moves
+    assert dists.moves["earthquake"] > 0
+    # tera not belief-filtered
+    assert len(dists.tera_types) > 0

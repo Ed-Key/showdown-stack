@@ -1,7 +1,7 @@
 """Data models for Showdown Copilot."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from battle_testing.team_parser import PokemonSpec
 
@@ -39,3 +39,13 @@ class ModalSet:
             tera_type=self.tera_type,
             weight_kg=self.weight_kg,
         )
+
+
+@dataclass
+class Distributions:
+    """Filtered chaos distributions per category. Each is name → probability."""
+    moves: dict[str, float] = field(default_factory=dict)
+    items: dict[str, float] = field(default_factory=dict)
+    abilities: dict[str, float] = field(default_factory=dict)
+    spreads: dict[str, float] = field(default_factory=dict)
+    tera_types: dict[str, float] = field(default_factory=dict)
