@@ -34,16 +34,19 @@ export default defineContentScript({
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
     panel.id = 'sc-panel';
-    panel.innerHTML = [
-      '<div class="sc-header">Copilot — idle</div>',
-      '<div class="sc-lead-matrix" style="display:none"></div>',
-      '<div class="sc-best">—</div>',
-      '<div class="sc-stats">—</div>',
-      '<div class="sc-pv">PV: —</div>',
-      '<div class="sc-alts">—</div>',
-      '<div class="sc-notes-header" title="Battle note (press N for per-turn notes)">📝 Battle note <span class="sc-notes-toggle">[show]</span></div>',
-      '<div class="sc-notes-body" style="display:none"><textarea class="sc-battle-note" placeholder="Free-form notes for this battle..." spellcheck="false"></textarea></div>',
-    ].join('');
+    panel.innerHTML = `
+      <div class="sc-pinned">
+        <div class="sc-header">Copilot — idle</div>
+        <div class="sc-conflict" style="display:none"></div>
+        <div class="sc-best">—</div>
+        <div class="sc-stats">—</div>
+        <div class="sc-pv">PV: —</div>
+        <div class="sc-alts">—</div>
+        <div class="sc-notes-header" title="Battle note (press N for per-turn notes)">📝 Battle note <span class="sc-notes-toggle">[show]</span></div>
+        <div class="sc-notes-body" style="display:none"><textarea class="sc-battle-note" placeholder="Free-form notes for this battle..." spellcheck="false"></textarea></div>
+      </div>
+      <div class="sc-cards"></div>
+    `;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -57,10 +60,40 @@ export default defineContentScript({
         user-select: none;
       }
       #sc-panel .sc-header { font-weight: bold; margin-bottom: 6px; color: #4af; }
-      #sc-panel .sc-lead-matrix {
-        font-size: 11px; color: #fc6; margin: -2px 0 6px 0;
-        padding: 4px 6px; border-left: 2px solid #fc6;
-        background: rgba(255,200,80,0.08); word-break: break-word;
+      #sc-panel .sc-pinned {
+        border-bottom: 1px solid #333;
+        padding-bottom: 6px;
+        margin-bottom: 6px;
+      }
+      #sc-panel .sc-cards .sc-card {
+        border-top: 1px solid #2a2a2a;
+      }
+      #sc-panel .sc-card-header {
+        cursor: pointer;
+        user-select: none;
+        font-size: 11px;
+        padding: 4px 0;
+        display: flex;
+        justify-content: space-between;
+      }
+      #sc-panel .sc-card-toggle {
+        color: #888;
+      }
+      #sc-panel .sc-conflict {
+        background: #5a1f1f;
+        color: #ffd0d0;
+        padding: 4px 6px;
+        border-radius: 3px;
+        margin: 4px 0;
+        font-size: 11px;
+      }
+      #sc-panel .sc-conflict.warn {
+        background: #5a4a1f;
+        color: #fff0c0;
+      }
+      #sc-panel .sc-conflict.info {
+        background: #2a2a2a;
+        color: #aaa;
       }
       #sc-panel .sc-best { font-size: 17px; font-weight: bold; color: #7fe; margin: 4px 0; }
       #sc-panel .sc-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
@@ -108,10 +141,12 @@ export default defineContentScript({
     document.body.appendChild(panel);
 
     const hdrEl = panel.querySelector<HTMLDivElement>('.sc-header')!;
+    const conflictEl = panel.querySelector<HTMLDivElement>('.sc-conflict')!;
     const bestEl = panel.querySelector<HTMLDivElement>('.sc-best')!;
     const statsEl = panel.querySelector<HTMLDivElement>('.sc-stats')!;
     const pvEl = panel.querySelector<HTMLDivElement>('.sc-pv')!;
     const altsEl = panel.querySelector<HTMLDivElement>('.sc-alts')!;
+    const cardsRoot = panel.querySelector<HTMLDivElement>('.sc-cards')!;
     const notesHeaderEl = panel.querySelector<HTMLDivElement>('.sc-notes-header')!;
     const notesBodyEl = panel.querySelector<HTMLDivElement>('.sc-notes-body')!;
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
