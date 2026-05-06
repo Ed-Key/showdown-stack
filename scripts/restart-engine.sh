@@ -31,7 +31,7 @@ fi
 ENGINE_DIR="$(cd "$ENGINE_DIR" && pwd)"
 echo "Using engine dir: $ENGINE_DIR"
 
-EXISTING_PID="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+EXISTING_PID="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
 if [ -n "$EXISTING_PID" ]; then
   echo "Killing existing engine on :$PORT (PID $EXISTING_PID)"
   kill "$EXISTING_PID"
@@ -48,7 +48,7 @@ nohup ./target/release/server \
 disown
 
 sleep 2
-NEW_PID="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+NEW_PID="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
 if [ -n "$NEW_PID" ]; then
   echo "Engine restarted on :$PORT (PID $NEW_PID), log: $LOG"
 else
