@@ -470,6 +470,10 @@ class BeliefTracker:
         """
         self._beliefs = {}
 
+    def all_beliefs(self) -> dict[str, OpponentBelief]:
+        """Return a defensive copy of the belief map for external consumers."""
+        return dict(self._beliefs)
+
     # --- State-recording API (called by the live message hook) ---
 
     def on_reveal_move(self, species: str, move_id: str) -> None:

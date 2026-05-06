@@ -861,3 +861,13 @@ def test_MAGICGUARD_SPECIES_pool_membership():
         "in gen 9 — these would cause R4 to mis-fire HDB inference:\n  "
         + "\n  ".join(failures)
     )
+
+
+def test_all_beliefs_returns_dict_keyed_by_normalized_species():
+    tracker = BeliefTracker()
+    tracker.on_reveal_move("Garchomp", "earthquake")
+    tracker.on_reveal_move("Tyranitar", "stoneedge")
+    result = tracker.all_beliefs()
+    assert set(result.keys()) == {"garchomp", "tyranitar"}
+    assert "earthquake" in result["garchomp"].revealed_moves
+    assert "stoneedge" in result["tyranitar"].revealed_moves
