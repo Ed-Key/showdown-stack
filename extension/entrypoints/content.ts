@@ -11,6 +11,7 @@ import {
   buildPlanHMeta, translate,
   TYPE_CHART, DEFAULT_SC, STATUS,
 } from '../lib/translate';
+import { snapshotState, snapshotSide } from '../lib/snapshot';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -447,45 +448,6 @@ export default defineContentScript({
         pv: r.final?.pv,
       }));
     (win as any).__scDumpBattle = () => JSON.stringify(scHistory, null, 2);
-
-    function snapshotSide(s: any) {
-      const active = s?.active?.[0];
-      const mvTrack = (active?.moveTrack || []).map((m: [string, number]) => m[0]);
-      return {
-        activeSpecies: active?.species?.name || active?.speciesForme || null,
-        activeHp: active?.hp ?? null,
-        activeMaxhp: active?.maxhp ?? null,
-        activeHpPct: active?.maxhp
-          ? Math.round(((active.hp || 0) / active.maxhp) * 100)
-          : null,
-        status: active?.status || null,
-        item: active?.item || null,
-        ability: active?.ability || active?.baseAbility || null,
-        boosts: active?.boosts || {},
-        revealedMoves: mvTrack,
-        team: (s?.pokemon || []).map((p: any) => ({
-          species: p.species?.name || p.speciesForme || p.species,
-          fainted: !!p.fainted,
-          hpPct: p.maxhp ? Math.round(((p.hp || 0) / p.maxhp) * 100) : null,
-          status: p.status || null,
-        })),
-        sideConditions: s?.sideConditions || {},
-      };
-    }
-
-    function snapshotState(b: any) {
-      return {
-        turn: b.turn,
-        weather: b.weather || 'none',
-        pseudoWeather: (b.pseudoWeather || []).map((pw: any) => pw[0]),
-        myActive: b.mySide?.active?.[0]?.species?.name
-          || b.mySide?.active?.[0]?.speciesForme || null,
-        oppActive: b.farSide?.active?.[0]?.species?.name
-          || b.farSide?.active?.[0]?.speciesForme || null,
-        my: snapshotSide(b.mySide),
-        opp: snapshotSide(b.farSide),
-      };
-    }
 
     function pct(v: number | undefined) {
       return ((v || 0) * 100).toFixed(0) + '%';
