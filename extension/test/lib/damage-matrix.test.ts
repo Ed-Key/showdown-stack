@@ -157,6 +157,83 @@ describe('buildDamageMatrix', () => {
     expect(offCell.dmgPctMax).toBeLessThanOrEqual(28);
   });
 
+  // --- Fix #2: opp-side chaos modal spread is honored ---
+  // Setup shared by Tests A/B/C: opp Tyranitar (CB Stone Edge) attacks
+  // my Heatran. We compare cell damage with vs without a chaos spread
+  // applied to the opp Ttar.
+
+  const ttarAttacker = {
+    species: 'Tyranitar', level: 100, types: ['Rock', 'Dark'],
+    hp: 408, maxhp: 408, ability: 'sandstream', item: 'choiceband',
+    attack: 367, defense: 256, specialAttack: 167, specialDefense: 217, speed: 263,
+    status: 'None',
+    moves: [{ id: 'stoneedge', pp: 8 }],
+    terastallized: false, teraType: '',
+  } as const;
+
+  const heatranDefender = {
+    species: 'Heatran', level: 100, types: ['Fire', 'Steel'],
+    hp: 386, maxhp: 386, ability: 'flashfire', item: 'leftovers',
+    attack: 194, defense: 249, specialAttack: 296, specialDefense: 342, speed: 190,
+    status: 'None',
+    moves: [], terastallized: false, teraType: '',
+  } as const;
+
+  function buildTtarMatrix(beliefSpread: string | null | 'empty' | 'absent') {
+    const opts: Parameters<typeof buildDamageMatrix>[0] = {
+      attackers: [ttarAttacker as any],
+      defenders: [heatranDefender as any],
+      field: { weather: '', terrain: '' },
+      attackerSide: 'opp',
+    };
+    if (beliefSpread !== 'absent') {
+      const spreads =
+        beliefSpread === 'empty' || beliefSpread === null
+          ? []
+          : [{ name: beliefSpread, pct: 80 }];
+      opts.beliefByDefender = {
+        tyranitar: {
+          // Reveal stoneedge so movesForMon() returns it; without revealed
+          // moves and an empty modal.moves, movesForMon() yields zero
+          // moves and computeCell() never runs.
+          revealed: { moves: ['stoneedge'], item: null, ability: null, tera_type: null },
+          modal: { moves: [], items: [], abilities: [], spreads, tera_types: [] },
+          speed_range: null,
+          item_inferred_choicescarf: false,
+        },
+      };
+    }
+    return buildDamageMatrix(opts);
+  }
+
+  it('Fix #2A: chaos modal spread is honored — defensive Ttar spread changes damage', () => {
+    // With the chaos spread "Adamant:252/64/0/0/192/0", Ttar is 252 HP /
+    // 64 Atk / 192 SpD with NO Atk-boosting EV stack (only 64 Atk, neutral
+    // nature on the Atk axis aside from Adamant +Atk -SpA). The heuristic
+    // path instead gives Ttar 252 Atk / Adamant. Stone Edge from a 64 Atk
+    // Adamant Ttar should hit measurably differently than from 252+ Adamant
+    // (heuristic). The exact direction depends on the spread; we just
+    // assert the values DIFFER.
+    const heuristicCell = buildTtarMatrix('absent').cells[0];
+    const chaosCell = buildTtarMatrix('Adamant:252/64/0/0/192/0').cells[0];
+    expect(chaosCell.dmgPctMin).not.toBe(heuristicCell.dmgPctMin);
+    expect(chaosCell.dmgPctMax).not.toBe(heuristicCell.dmgPctMax);
+  });
+
+  it('Fix #2B: malformed spread falls back to heuristic', () => {
+    const heuristicCell = buildTtarMatrix('absent').cells[0];
+    const malformedCell = buildTtarMatrix('Garbage:x/y/z').cells[0];
+    expect(malformedCell.dmgPctMin).toBe(heuristicCell.dmgPctMin);
+    expect(malformedCell.dmgPctMax).toBe(heuristicCell.dmgPctMax);
+  });
+
+  it('Fix #2C: empty spreads array falls back to heuristic', () => {
+    const heuristicCell = buildTtarMatrix('absent').cells[0];
+    const emptyCell = buildTtarMatrix('empty').cells[0];
+    expect(emptyCell.dmgPctMin).toBe(heuristicCell.dmgPctMin);
+    expect(emptyCell.dmgPctMax).toBe(heuristicCell.dmgPctMax);
+  });
+
   it('marks modal-source moves with confidence pct', () => {
     const matrix = buildDamageMatrix({
       attackers: [{

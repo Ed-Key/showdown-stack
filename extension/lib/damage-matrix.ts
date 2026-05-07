@@ -39,7 +39,7 @@ export function buildDamageMatrix(opts: {
     for (const def of opts.defenders) {
       const moves = movesForMon(atk, opts.beliefByDefender?.[normalizeName(atk.species)]);
       for (const moveSpec of moves) {
-        cells.push(computeCell(gen, atk, def, moveSpec, opts.field, opts.attackerSide));
+        cells.push(computeCell(gen, atk, def, moveSpec, opts.field, opts.attackerSide, opts.beliefByDefender));
       }
     }
   }
@@ -115,6 +115,24 @@ function defenderNature(snap: PokemonSnapshot): string {
   return 'Hardy';
 }
 
+// Smogon chaos spreads come as "Nature:hp/atk/def/spa/spd/spe", e.g.
+// "Adamant:0/252/0/0/4/252" or "Calm:252/0/4/0/252/0". Returns null when
+// the input is malformed (defense at module boundary).
+function parseSmogonSpread(s: string): {
+  nature: string;
+  evs: { hp: number; atk: number; def: number; spa: number; spd: number; spe: number };
+} | null {
+  if (!s) return null;
+  const [nature, evsRaw] = s.split(':');
+  if (!nature || !evsRaw) return null;
+  const parts = evsRaw.split('/').map(n => parseInt(n, 10));
+  if (parts.length !== 6 || parts.some(p => Number.isNaN(p) || p < 0 || p > 252)) return null;
+  return {
+    nature,
+    evs: { hp: parts[0], atk: parts[1], def: parts[2], spa: parts[3], spd: parts[4], spe: parts[5] },
+  };
+}
+
 // @smogon/calc stores ability/item as opaque strings and compares them by
 // strict equality (e.g. `hasAbility('Levitate')`) — lowercase or
 // concatenated forms silently no-op. Look up the canonical Title-Case name
@@ -160,6 +178,7 @@ function buildPokemonForCalc(
   snap: PokemonSnapshot,
   role: 'attacker' | 'defender',
   isMine: boolean,
+  oppBelief?: OpponentBeliefSnapshot | null,
 ): Pokemon {
   const commonOpts: any = {
     level: snap.level,
@@ -169,6 +188,30 @@ function buildPokemonForCalc(
   };
   if (role === 'defender') {
     commonOpts.curHP = snap.hp;
+  }
+
+  if (!isMine) {
+    // Fix #2: prefer Smogon chaos modal spread when available. The opp
+    // snapshot's stats come from the engine's "neutral default" anyway,
+    // so the actually-popular ladder spread is more accurate than the
+    // 4-bucket heuristic guess. Fall through to heuristic if no spread or
+    // parse fails.
+    const top = oppBelief?.modal?.spreads?.[0]?.name;
+    if (top) {
+      const parsed = parseSmogonSpread(top);
+      if (parsed) {
+        const synth = new Pokemon(gen, snap.species, {
+          ...commonOpts,
+          nature: parsed.nature as any,
+          evs: parsed.evs,
+          ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+        });
+        // No verification needed against snap stats — opp's snapshot stats
+        // are synthesized from the engine's "neutral default" anyway, so
+        // chaos is more accurate than what the snapshot reports.
+        return synth;
+      }
+    }
   }
 
   if (isMine) {
@@ -233,10 +276,16 @@ function computeCell(
   moveSpec: { id: string; source: 'revealed' | 'modal'; pct?: number },
   field: { weather: string; terrain: string },
   attackerSide: 'mine' | 'opp',
+  beliefByOpp: Record<string, OpponentBeliefSnapshot> | undefined,
 ): MatrixCell {
   try {
-    const attacker = buildPokemonForCalc(gen, atk, 'attacker', attackerSide === 'mine');
-    const defender = buildPokemonForCalc(gen, def, 'defender', attackerSide === 'opp');
+    // beliefByOpp is keyed by opp species (legacy name `beliefByDefender`
+    // is misleading — flag for follow-up rename). Whichever side is the
+    // opp gets the corresponding belief; the own-side mon gets undefined.
+    const attackerOpp = attackerSide === 'opp' ? beliefByOpp?.[normalizeName(atk.species)] ?? null : null;
+    const defenderOpp = attackerSide === 'mine' ? beliefByOpp?.[normalizeName(def.species)] ?? null : null;
+    const attacker = buildPokemonForCalc(gen, atk, 'attacker', attackerSide === 'mine', attackerOpp);
+    const defender = buildPokemonForCalc(gen, def, 'defender', attackerSide === 'opp', defenderOpp);
     const move = new Move(gen, moveSpec.id);
     const fieldOpts: any = {};
     if (field.weather) fieldOpts.weather = field.weather;
