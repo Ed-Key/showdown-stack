@@ -593,6 +593,8 @@ OUTPUT:
 - 4-6 sentences in competitive vocabulary (e.g., "soft check", "force-out", "pivot", "Choice-locked").
 - Walk through the engine's PV in plain English.
 - If the engine's bestMove and the damage matrix disagree on safety (e.g., engine picks switch X but matrix shows X gets OHKO'd), explicitly flag the conflict.
+- If the conflict is SEVERE (OHKO mismatch on the picked switch, immunity violation, or a revealed-move OHKO the engine seems unaware of) AND one of the listed "Engine alternatives" addresses the conflict, you MAY name that alternative and explain in one sentence why it's safer. Only point to moves explicitly listed in "Engine alternatives" — never invent moves.
+- Default to describing the engine's bestMove. Do NOT second-guess the engine on close % differences (e.g., 38/36/34% alts) or marginal damage; only override on severe matrix-grounded conflicts.
 - No filler ("careful play required", "the matchup is tricky") — be specific.
 - No hedging ("in general", "depending on")."""
 
