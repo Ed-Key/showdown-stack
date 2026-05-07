@@ -18,6 +18,8 @@ import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { renderMatrix } from '../panels/matrix';
 import { renderThreats } from '../panels/threats';
+import { fetchExplanation } from '../lib/explainer';
+import { renderExplainer } from '../panels/explainer';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -172,6 +174,13 @@ export default defineContentScript({
       #sc-panel .sc-threat-row { padding: 1px 0; color: #ddd; }
       #sc-panel .sc-conf { color: #888; font-size: 10px; }
       #sc-panel .sc-empty { color: #666; font-size: 10px; padding: 2px 0; }
+      #sc-panel .sc-explainer-text {
+        font-size: 11px; line-height: 1.4; color: #ddd;
+        padding: 4px; white-space: pre-wrap;
+      }
+      #sc-panel .sc-explainer-loading {
+        color: #888; font-style: italic; padding: 4px;
+      }
       #sc-panel .sc-tp-row {
         display: flex; justify-content: space-between;
         font-size: 11px; padding: 1px 0;
@@ -280,6 +289,55 @@ export default defineContentScript({
         if (room?.battle && room?.id) {
           refreshMatrix(room.battle, room).then(() => refreshThreats(room.battle));
         }
+      }
+    });
+
+    // ---- Explainer (Why-this-turn-matters) card -------------------------
+    // LLM-rendered explanation of the engine's recommendation in plain
+    // English. Fired once per engine `final` event, with the matrix
+    // top-cells summary so the LLM can spot conflicts (engine recommends
+    // stay-in but matrix says we get OHKO'd, etc.). Cached on
+    // (battleId, turn, rqid) by lib/explainer.ts.
+    const explainerCard = mountExpandableCard(cardsRoot, 'explainer', '🧠 Why this turn matters');
+    let lastExplanation: string | null = null;
+    let explainerLoading = false;
+
+    // Build a top-cells summary of `lastMatrix` for the LLM. Caps prompt
+    // size at ~8 cells, OHKO-prioritized then by max damage. Returns
+    // undefined if the matrix is empty so the proxy skips the field.
+    function buildMatrixSummary(): any | undefined {
+      if (!lastMatrix) return undefined;
+      const cells = lastMatrix.cells.slice();
+      cells.sort((a, b) => {
+        if (a.ohko !== b.ohko) return a.ohko ? -1 : 1;
+        return b.dmgPctMax - a.dmgPctMax;
+      });
+      const top = cells.slice(0, 8);
+      if (lastMatrix.attackerSide === 'opp') {
+        return {
+          opp_attacks_me: top.map(c => ({
+            opp: c.attacker, move: c.move, source: c.moveSource,
+            target: c.defender, dmg_pct_max: c.dmgPctMax,
+            ohko: c.ohko, two_hko: c.twoHko,
+          })),
+        };
+      } else {
+        return {
+          me_attacks_opp: top.map(c => ({
+            me: c.attacker, move: c.move, source: c.moveSource,
+            target: c.defender, dmg_pct_max: c.dmgPctMax,
+            ohko: c.ohko, two_hko: c.twoHko,
+          })),
+        };
+      }
+    }
+
+    // Re-render on toggle-to-expand. If a fetch is in flight and we have
+    // no text yet, show the loading state; otherwise show the cached text
+    // (or empty state if the previous fetch failed).
+    explainerCard.toggleBtn.addEventListener('click', () => {
+      if (explainerCard.isExpanded) {
+        renderExplainer(explainerCard.body, lastExplanation, explainerLoading && lastExplanation === null);
       }
     });
 
@@ -614,6 +672,32 @@ export default defineContentScript({
           (record.forceSwitch ? ' [forceSwitch: post-filtered]' : '')
         );
         console.log(`[sc:battle] T${record.turn} PV: ${pv} | alts: ${alts}`);
+      }
+      // Fire the LLM explainer once per turn-final event. The proxy caches
+      // on (battle_id, turn, rqid) so re-fires are cheap. Pass the matrix
+      // top-cells summary so the LLM can spot engine/matrix conflicts.
+      if (u.event === 'final' && record) {
+        const room = win.app?.curRoom;
+        const b = room?.battle;
+        const br = room;
+        if (b && br?.id) {
+          explainerLoading = true;
+          if (explainerCard.isExpanded) renderExplainer(explainerCard.body, null, true);
+          fetchExplanation({
+            proxyUrl: 'http://localhost:7271',
+            battleId: br.id,
+            turn: b.turn,
+            rqid: record.rqid ?? 0,
+            snapshot: snapshotState(b),
+            engineResult: u,
+            lastSteps: (b.stepQueue || []).slice(-12),
+            matrixSummary: buildMatrixSummary(),
+          }).then(text => {
+            lastExplanation = text;
+            explainerLoading = false;
+            if (explainerCard.isExpanded) renderExplainer(explainerCard.body, text, false);
+          });
+        }
       }
     }
 
