@@ -2,7 +2,16 @@
 // events and produces a compact per-battle post-mortem.
 // No DOM, no globals, no side effects — safe to import into Vitest.
 
-export const POSTMORTEM_SCHEMA_VERSION = 3 as const;
+export const POSTMORTEM_SCHEMA_VERSION = 4 as const;
+
+export type OverrideTag =
+  | 'item_assumption'      // engine wrong about opp item (e.g. assumed CB, was Scarf)
+  | 'speed_assumption'     // wrong speed tier
+  | 'ability_missed'       // wrong ability (e.g. missed HA Multiscale)
+  | 'set_unusual'          // opp ran an off-meta set
+  | 'long_term'            // engine optimized too short-term
+  | 'engine_correct'       // I overrode but engine was actually right
+  | 'other';
 
 export type DecisionRecordInput = {
   battleId: string;
@@ -91,6 +100,7 @@ export type RegularTurnDiff = {
   failureMessages: string[];
   residualEvents: ResidualEvent[];
   userNote: string | null;
+  userOverrideTag: OverrideTag | null;
 };
 
 export type ForceSwitchTurnDiff = {
@@ -109,6 +119,7 @@ export type ForceSwitchTurnDiff = {
   switchInTook: { hpPctLost: number; from: string } | null;
   residualEvents: ResidualEvent[];
   userNote: string | null;
+  userOverrideTag: OverrideTag | null;
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -449,6 +460,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     failureMessages: [...te.hints],
     residualEvents: [...te.residualEvents],
     userNote: null,
+    userOverrideTag: null,
   };
 }
 
@@ -560,6 +572,7 @@ function buildForceSwitchTurnDiff(
     switchInTook,
     residualEvents: [...residualEvents],
     userNote: null,
+    userOverrideTag: null,
   };
 }
 
