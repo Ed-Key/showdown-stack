@@ -16,6 +16,7 @@ import { mountExpandableCard } from '../lib/tabs';
 import { fetchBeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
+import { detectConflict, type ConflictWarning } from '../lib/conflict';
 import { renderMatrix } from '../panels/matrix';
 import { renderThreats } from '../panels/threats';
 import { fetchExplanation } from '../lib/explainer';
@@ -586,6 +587,34 @@ export default defineContentScript({
       return moveStr.toLowerCase();
     }
 
+    function renderConflict(c: ConflictWarning | null) {
+      if (!c) {
+        conflictEl.style.display = 'none';
+        return;
+      }
+      conflictEl.textContent = c.message;
+      conflictEl.className = `sc-conflict ${c.level === 'strong' || c.level === 'pivot' ? '' : c.level === 'warn' ? 'warn' : 'info'}`;
+      conflictEl.style.display = 'block';
+    }
+
+    // Detect whether the engine's bestMove string is a switch (species name) or
+    // an actual move. The proxy may emit either "switch:dianciemega" (prefix
+    // convention) or a bare uppercase species like "DIANCIEMEGA"; moves are
+    // typically uppercase like "EARTHQUAKE", so prefix + bench-species lookup
+    // is more robust than a leading-capital regex.
+    function parseRecommendation(bestMove: string, myTeamSpecies: string[]): {
+      move: string; isSwitch: boolean; switchTarget?: string;
+    } {
+      if (!bestMove) return { move: '', isSwitch: false };
+      if (bestMove.startsWith('switch:')) {
+        return { move: bestMove, isSwitch: true, switchTarget: bestMove.slice(7) };
+      }
+      const norm2 = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const target = myTeamSpecies.find(sp => norm2(sp) === norm2(bestMove));
+      if (target) return { move: bestMove, isSwitch: true, switchTarget: target };
+      return { move: bestMove, isSwitch: false };
+    }
+
     function renderUpdate(u: any) {
       const arrow = u.event === 'final' ? '▲' : '•';
       const conf = ((u.confidence || 0) * 100).toFixed(0);
@@ -651,6 +680,27 @@ export default defineContentScript({
 
     function handleEngineUpdate(u: any, record: DecisionRecord | null) {
       renderUpdate(u);
+      // Conflict warning: compare engine recommendation against threats report.
+      if (u.event === 'final' && lastThreats) {
+        const b = win.app?.curRoom?.battle;
+        const myActive = b?.mySide?.active?.[0];
+        const oppActive = b?.farSide?.active?.[0];
+        if (myActive && oppActive) {
+          const myTeamSnaps = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+          const myTeamSpecies = myTeamSnaps.map((p: any) => p.species);
+          const rec = parseRecommendation(u.bestMove || '', myTeamSpecies);
+          const conflict = detectConflict({
+            engineRecommendation: rec,
+            threats: lastThreats,
+            myActive: buildMyPokemon(myActive, null, win),
+            oppActive: buildOppPokemon(oppActive, win),
+            myTeam: myTeamSnaps,
+          });
+          renderConflict(conflict);
+        } else {
+          renderConflict(null);
+        }
+      }
       if (!record) return;
       record.updates.push(u);
       if (u.event === 'final' || u.error) {
