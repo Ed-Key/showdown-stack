@@ -481,3 +481,63 @@ def test_get_belief_returns_per_opp_revealed_and_modal(client, sample_belief_sta
     t = body["opponents"]["tyranitar"]
     assert t["revealed"]["moves"] == []
     assert len(t["modal"]["moves"]) >= 1
+
+
+# ---- /annotation endpoint tests ------------------------------------------
+
+def test_annotation_persists_override_tag(client, monkeypatch, tmp_path):
+    """Per-turn annotations submitted with `overrideTag` (e.g. user picked
+    'item_assumption' from the dropdown) must serialize that field into the
+    JSONL line so the engine-debug corpus pipeline can later aggregate
+    overrides by error category."""
+    monkeypatch.setattr(proxy, "_NOTES_DIR", tmp_path)
+
+    body = {
+        "battleId": "battle-gen9ou-override-1",
+        "turn": 7,
+        "kind": "turn",
+        "text": "engine recced stay-in but Garchomp was clearly CB",
+        "overrideTag": "item_assumption",
+        "timestampMs": 1714723200000,
+    }
+    r = client.post("/annotation", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+
+    from datetime import datetime as _dt
+    out = tmp_path / f"{_dt.now().strftime('%Y-%m-%d')}.jsonl"
+    assert out.exists(), f"expected JSONL at {out}"
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[-1])
+    assert record["battleId"] == "battle-gen9ou-override-1"
+    assert record["turn"] == 7
+    assert record["kind"] == "turn"
+    assert record["text"].startswith("engine recced")
+    assert record["overrideTag"] == "item_assumption"
+
+
+def test_annotation_without_override_tag_writes_null(client, monkeypatch, tmp_path):
+    """Battle-level notes (and older extension clients) omit `overrideTag`.
+    Pydantic's default of None must serialize to JSON `null` so downstream
+    readers see a consistent schema across every line, regardless of source."""
+    monkeypatch.setattr(proxy, "_NOTES_DIR", tmp_path)
+
+    body = {
+        "battleId": "battle-gen9ou-no-tag-2",
+        "turn": 0,
+        "kind": "battle",
+        "text": "freeform reflection on the whole match",
+    }
+    r = client.post("/annotation", json=body)
+    assert r.status_code == 200, r.text
+
+    from datetime import datetime as _dt
+    out = tmp_path / f"{_dt.now().strftime('%Y-%m-%d')}.jsonl"
+    raw = out.read_text(encoding="utf-8").splitlines()[-1]
+    # Empirically verified: pydantic v2 model_dump_json() emits null (not omits)
+    # for Optional fields whose value is None. Lock that contract here.
+    assert '"overrideTag":null' in raw, raw
+    record = json.loads(raw)
+    assert record["overrideTag"] is None
+    assert record["kind"] == "battle"

@@ -548,29 +548,42 @@ _NOTES_DIR = Path(
 )
 
 
-@app.post("/annotation")
-async def save_annotation(req: Request) -> JSONResponse:
-    """Append a user annotation to today's JSONL file.
+class AnnotationRequest(BaseModel):
+    """Schema for POST /annotation. Extension fires this when a user saves a
+    per-turn ('N' modal) or per-battle freeform note. `overrideTag` is set
+    only when the user picked a tag from the dropdown in the per-turn modal;
+    older clients and battle-level notes leave it None. Persisted verbatim
+    to JSONL — downstream (engine-debug corpus) reads `overrideTag` to
+    aggregate which engine error categories triggered overrides."""
 
-    Body schema: {battleId: str, turn: int, kind: "turn"|"battle",
-                  text: str, timestampMs: int}.
+    battleId: str
+    turn: int
+    kind: str  # "turn" | "battle"
+    text: str
+    overrideTag: str | None = None
+    timestampMs: int | None = None
+
+
+@app.post("/annotation")
+async def save_annotation(req: AnnotationRequest) -> JSONResponse:
+    """Append a user annotation to today's JSONL file.
 
     File: {NOTES_DIR}/{YYYY-MM-DD}.jsonl, one note per line. Append-only;
     UTF-8; never overwrites existing entries. Fire-and-forget from the
     extension side — failures here don't affect localStorage capture.
+    `overrideTag` is null for battle-level notes / older clients.
     """
-    body: dict[str, Any] = await req.json()
-    # Trust input — extension is local, format is fixed. Sanity checks only.
-    if not isinstance(body.get("battleId"), str) or not body["battleId"]:
+    if not req.battleId:
         return JSONResponse({"ok": False, "error": "missing battleId"}, status_code=400)
-    if body.get("kind") not in ("turn", "battle"):
+    if req.kind not in ("turn", "battle"):
         return JSONResponse({"ok": False, "error": "bad kind"}, status_code=400)
 
     date = datetime.now().strftime("%Y-%m-%d")
     out = _NOTES_DIR / f"{date}.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
+    line = req.model_dump_json()
     with out.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(body, ensure_ascii=False) + "\n")
+        f.write(line + "\n")
     return JSONResponse({"ok": True})
 
 
