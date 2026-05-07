@@ -142,6 +142,13 @@ export default defineContentScript({
         border-radius: 4px; padding: 6px 8px;
         font: inherit; font-size: 13px;
       }
+      #sc-note-modal .sc-override-tag {
+        width: 100%; box-sizing: border-box;
+        background: #0e0e0e; color: #eee; border: 1px solid #333;
+        border-radius: 4px; padding: 6px 8px;
+        font: inherit; font-size: 12px;
+        margin: 6px 0;
+      }
       #sc-note-modal .sc-note-hint {
         color: #888; font-size: 10px; margin-top: 6px;
       }
@@ -371,6 +378,12 @@ export default defineContentScript({
       else notes[String(turn)] = text;
       localStorage.setItem(`sc:turn-notes:${battleId}`, JSON.stringify(notes));
     }
+    function writeTurnOverrideTag(battleId: string, turn: number, tag: string): void {
+      localStorage.setItem(`sc:override-tag:${battleId}:${turn}`, tag);
+    }
+    function readTurnOverrideTag(battleId: string, turn: number): string | null {
+      return localStorage.getItem(`sc:override-tag:${battleId}:${turn}`);
+    }
     function readBattleNote(battleId: string): string {
       return localStorage.getItem(`sc:battle-note:${battleId}`) || '';
     }
@@ -383,6 +396,7 @@ export default defineContentScript({
       turn: number;
       kind: 'turn' | 'battle';
       text: string;
+      overrideTag?: string | null;
     }): void {
       // Fire-and-forget — do not block UX. localStorage is the fallback.
       fetch(PROXY_NOTE_URL, {
@@ -399,6 +413,16 @@ export default defineContentScript({
     noteModal.innerHTML = [
       '<div class="sc-note-box">',
       '  <div class="sc-note-label">Note for T<span class="sc-note-turn">?</span>:</div>',
+      '  <select class="sc-override-tag">',
+      '    <option value="">— no engine error this turn —</option>',
+      '    <option value="item_assumption">Engine wrong: item assumption (CB? Scarf?)</option>',
+      '    <option value="speed_assumption">Engine wrong: speed assumption</option>',
+      '    <option value="ability_missed">Engine wrong: ability missed (HA Multiscale, etc.)</option>',
+      '    <option value="set_unusual">Opp ran unusual / off-meta set</option>',
+      '    <option value="long_term">Engine optimized too short-term</option>',
+      '    <option value="engine_correct">I overrode but engine was right</option>',
+      '    <option value="other">Other engine error</option>',
+      '  </select>',
       '  <input type="text" class="sc-note-input" maxlength="500" placeholder="What did you notice?" />',
       '  <div class="sc-note-hint">Enter to save · Esc to cancel</div>',
       '</div>',
@@ -406,6 +430,7 @@ export default defineContentScript({
     document.body.appendChild(noteModal);
     const noteModalTurnEl = noteModal.querySelector<HTMLSpanElement>('.sc-note-turn')!;
     const noteModalInput = noteModal.querySelector<HTMLInputElement>('.sc-note-input')!;
+    const noteModalTag = noteModal.querySelector<HTMLSelectElement>('.sc-override-tag')!;
 
     function openNoteModal(): void {
       if (!annotationState.battleId) return;
@@ -413,6 +438,8 @@ export default defineContentScript({
       noteModalTurnEl.textContent = String(turn);
       const existing = readTurnNotes(annotationState.battleId)[String(turn)] || '';
       noteModalInput.value = existing;
+      const existingTag = readTurnOverrideTag(annotationState.battleId, turn) || '';
+      noteModalTag.value = existingTag;
       noteModal.classList.add('visible');
       noteModalInput.focus();
       noteModalInput.select();
@@ -420,14 +447,19 @@ export default defineContentScript({
     function closeNoteModal(): void {
       noteModal.classList.remove('visible');
       noteModalInput.value = '';
+      noteModalTag.value = '';
     }
     function saveNoteFromModal(): void {
       const battleId = annotationState.battleId;
       if (!battleId) { closeNoteModal(); return; }
       const turn = annotationState.turn;
       const text = noteModalInput.value.trim();
+      const tag = noteModalTag.value || null;
       writeTurnNote(battleId, turn, text);
-      if (text) postAnnotation({ battleId, turn, kind: 'turn', text });
+      if (tag) writeTurnOverrideTag(battleId, turn, tag);
+      if (text || tag) {
+        postAnnotation({ battleId, turn, kind: 'turn', text, overrideTag: tag });
+      }
       closeNoteModal();
     }
 
@@ -517,6 +549,7 @@ export default defineContentScript({
       for (const t of pm.turns) {
         const note = turnNotes[String(t.turn)];
         if (note) t.userNote = note;
+        t.userOverrideTag = readTurnOverrideTag(pm.battleId, t.turn) as any;
       }
       const key = `sc:postmortem:${pm.battleId}`;
       const json = JSON.stringify(pm);
