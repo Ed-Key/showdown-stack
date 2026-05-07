@@ -142,12 +142,12 @@ export default defineContentScript({
       }
       #sc-panel .sc-matrix-legend {
         font-size: 10px; color: #888; margin: 4px 0 6px 0;
-        line-height: 1.5;
+        line-height: 1.7;
       }
       #sc-panel .sc-matrix-legend-chip {
-        display: inline-block; padding: 1px 4px; margin-right: 4px;
+        display: inline-block; padding: 1px 6px; margin-right: 4px;
         border: 1px solid #2a2a2a; border-radius: 2px;
-        font-size: 9px;
+        font-size: 9px; color: #ccc;
       }
       #sc-panel .sc-matrix-scroll {
         overflow-x: auto; max-width: 100%;
@@ -158,10 +158,12 @@ export default defineContentScript({
         white-space: nowrap;
       }
       #sc-panel .sc-matrix .sc-row-label { text-align: left; color: #aaa; }
-      #sc-panel .sc-matrix .sc-immune { color: #666; }
-      #sc-panel .sc-matrix .sc-warn { background: #4a3a1f; }
-      #sc-panel .sc-matrix .sc-2hko { background: #5a3a1f; }
-      #sc-panel .sc-matrix .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
+      /* Damage-tier color tokens — applied to BOTH matrix cells AND legend chips
+         so the chip swatches match the cell colors users see in the table. */
+      #sc-panel .sc-immune { color: #666; }
+      #sc-panel .sc-warn { background: #4a3a1f; color: #ffd9a8; }
+      #sc-panel .sc-2hko { background: #5a3a1f; color: #ffd9a8; }
+      #sc-panel .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
       #sc-panel .sc-matrix-empty { color: #888; font-style: italic; padding: 4px; }
     `;
     document.head.appendChild(style);
