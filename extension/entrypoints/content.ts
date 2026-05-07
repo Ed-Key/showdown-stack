@@ -165,6 +165,15 @@ export default defineContentScript({
       #sc-panel .sc-2hko { background: #5a3a1f; color: #ffd9a8; }
       #sc-panel .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
       #sc-panel .sc-matrix-empty { color: #888; font-style: italic; padding: 4px; }
+      #sc-panel .sc-tp-row {
+        display: flex; justify-content: space-between;
+        font-size: 11px; padding: 1px 0;
+      }
+      #sc-panel .sc-tp-name { color: #ddd; flex: 1; }
+      #sc-panel .sc-tp-stat {
+        color: #aaa; font-size: 10px;
+        margin-left: 8px; white-space: nowrap;
+      }
     `;
     document.head.appendChild(style);
     document.body.appendChild(panel);
@@ -822,16 +831,72 @@ export default defineContentScript({
       }
       if (key === lastKey) { trace(`cache-skip key=${key}`); return; }
 
-      // Team Preview: damage matrix not built yet (Stage 1). Show placeholder.
+      // Team Preview: per-mon stats leaderboard (Stage 1.5, Option C).
+      // Shows survives N/6 + threatens N/6 for each of my mons in team order
+      // (no sorting, no recommendation). Also refreshes the ⚔ matrix card so
+      // it doesn't show prior-battle data when the new battle's TP arrives.
       if (req?.teamPreview) {
         const myTeam = b.myPokemon || [];
         const oppTeam = b.farSide?.pokemon || [];
         if (myTeam.length && oppTeam.length >= 1) {
-          hdrEl.textContent = 'Copilot — team preview (matrix pending Stage 1)';
-          bestEl.textContent = '—';
-          statsEl.textContent = `${myTeam.length} v ${oppTeam.length}`;
-          pvEl.textContent = '';
-          altsEl.textContent = '';
+          const mySnaps = myTeam.map((p: any) => buildMyPokemon(p, null, win));
+          const oppSnaps = oppTeam.map((p: any) => buildOppPokemon(p, win));
+
+          fetchBeliefSnapshot('http://localhost:7271', br?.id || '').then((snap: any) => {
+            const beliefByOpp: Record<string, any> = {};
+            for (const [sp, b2] of Object.entries(snap?.opponents || {})) {
+              beliefByOpp[sp] = b2;
+            }
+            const field = {
+              weather: detectWeather(b) || '',
+              terrain: detectTerrain(b) || '',
+            };
+            const myAtk = buildDamageMatrix({
+              attackers: mySnaps, defenders: oppSnaps,
+              beliefByDefender: beliefByOpp,
+              field, attackerSide: 'mine',
+            });
+            const oppAtk = buildDamageMatrix({
+              attackers: oppSnaps, defenders: mySnaps,
+              beliefByDefender: beliefByOpp,
+              field, attackerSide: 'opp',
+            });
+
+            const oppCount = oppSnaps.length;
+            const rows = mySnaps.map((m: any) => {
+              const myCells = myAtk.cells.filter((c: any) => c.attacker === m.species);
+              const threatens = new Set(
+                myCells.filter((c: any) => c.ohko).map((c: any) => c.defender),
+              ).size;
+              const oppCellsAgainstMe = oppAtk.cells.filter((c: any) => c.defender === m.species);
+              const koMe = new Set(
+                oppCellsAgainstMe.filter((c: any) => c.ohko).map((c: any) => c.attacker),
+              ).size;
+              const survives = oppCount - koMe;
+              return { species: m.species, survives, threatens };
+            });
+
+            hdrEl.textContent = 'Copilot — team preview';
+            bestEl.textContent = 'pick a lead — numbers below';
+            statsEl.textContent =
+              `${mySnaps.length} candidates · ${oppCount} opps · matrix below for cell detail`;
+            pvEl.innerHTML = rows.map((r: any) =>
+              `<div class="sc-tp-row"><span class="sc-tp-name">${r.species}</span>` +
+              `<span class="sc-tp-stat">survives ${r.survives}/${oppCount}</span>` +
+              `<span class="sc-tp-stat">threatens ${r.threatens}/${oppCount}</span></div>`,
+            ).join('');
+            altsEl.textContent = '';
+          }).catch((err: any) => {
+            console.warn('[sc:team-preview] leaderboard fetch failed', err);
+            hdrEl.textContent = 'Copilot — team preview';
+            bestEl.textContent = '—';
+            statsEl.textContent = `${myTeam.length} v ${oppTeam.length} (belief fetch failed)`;
+          });
+
+          // Refresh the ⚔ matrix card so it tracks the new battle, not the
+          // prior one (fixes the stale-from-previous-battle bug).
+          if (matrixCard.isExpanded) refreshMatrix(b, br);
+
           lastKey = key;
         } else {
           hdrEl.textContent = 'Copilot — team preview';
