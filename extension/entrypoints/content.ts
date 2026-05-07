@@ -15,7 +15,9 @@ import { snapshotState, snapshotSide } from '../lib/snapshot';
 import { mountExpandableCard } from '../lib/tabs';
 import { fetchBeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
+import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { renderMatrix } from '../panels/matrix';
+import { renderThreats } from '../panels/threats';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -165,6 +167,11 @@ export default defineContentScript({
       #sc-panel .sc-2hko { background: #5a3a1f; color: #ffd9a8; }
       #sc-panel .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
       #sc-panel .sc-matrix-empty { color: #888; font-style: italic; padding: 4px; }
+      #sc-panel .sc-threats-header { font-size: 11px; color: #aaa; padding: 2px 0; }
+      #sc-panel .sc-threats-section { font-size: 11px; padding: 4px 0; border-top: 1px dotted #2a2a2a; }
+      #sc-panel .sc-threat-row { padding: 1px 0; color: #ddd; }
+      #sc-panel .sc-conf { color: #888; font-size: 10px; }
+      #sc-panel .sc-empty { color: #666; font-size: 10px; padding: 2px 0; }
       #sc-panel .sc-tp-row {
         display: flex; justify-content: space-between;
         font-size: 11px; padding: 1px 0;
@@ -228,6 +235,51 @@ export default defineContentScript({
       if (matrixCard.isExpanded) {
         const room = win.app?.curRoom;
         if (room?.battle && room?.id) refreshMatrix(room.battle, room);
+      }
+    });
+
+    // ---- Threats card ---------------------------------------------------
+    // Surfaces the highest-damage threats from opp's active mon (and bench)
+    // against your team, derived from the same DamageMatrix used by the
+    // matrix card. Reads `lastMatrix` directly — refreshThreats requires
+    // that refreshMatrix has already populated it.
+    const threatsCard = mountExpandableCard(cardsRoot, 'threats', '⚠ Threats');
+    let lastThreats: ThreatsReport | null = null;
+
+    function refreshThreats(b: any): void {
+      if (!b || !lastMatrix) {
+        lastThreats = null;
+        renderThreats(threatsCard.body, null);
+        return;
+      }
+      const myActive = b.mySide?.active?.[0];
+      const oppActive = b.farSide?.active?.[0];
+      if (!myActive || !oppActive) {
+        lastThreats = null;
+        renderThreats(threatsCard.body, null);
+        return;
+      }
+      const myTeam = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+      const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
+      lastThreats = computeThreats({
+        matrix: lastMatrix,
+        myActive: buildMyPokemon(myActive, null, win),
+        oppActive: buildOppPokemon(oppActive, win),
+        myTeam, oppTeam,
+        threshold: { warn: 50, danger: 80 },
+      });
+      renderThreats(threatsCard.body, lastThreats);
+    }
+
+    // Refresh on toggle-to-expand. Threats reads lastMatrix; if it's not
+    // populated yet (matrix card never expanded), force a matrix refresh
+    // first and chain the threats compute on completion.
+    threatsCard.toggleBtn.addEventListener('click', () => {
+      if (threatsCard.isExpanded) {
+        const room = win.app?.curRoom;
+        if (room?.battle && room?.id) {
+          refreshMatrix(room.battle, room).then(() => refreshThreats(room.battle));
+        }
       }
     });
 
@@ -894,8 +946,12 @@ export default defineContentScript({
           });
 
           // Refresh the ⚔ matrix card so it tracks the new battle, not the
-          // prior one (fixes the stale-from-previous-battle bug).
-          if (matrixCard.isExpanded) refreshMatrix(b, br);
+          // prior one (fixes the stale-from-previous-battle bug). Threats
+          // refreshes after matrix completes (fire-and-forget chain) so it
+          // sees the new lastMatrix.
+          if (matrixCard.isExpanded || threatsCard.isExpanded) {
+            refreshMatrix(b, br).then(() => refreshThreats(b));
+          }
 
           lastKey = key;
         } else {
@@ -969,7 +1025,9 @@ export default defineContentScript({
         console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
         requestAnalysis(payload, record);
         lastKey = key;
-        if (matrixCard.isExpanded) refreshMatrix(b, br);
+        if (matrixCard.isExpanded || threatsCard.isExpanded) {
+          refreshMatrix(b, br).then(() => refreshThreats(b));
+        }
       } catch (e: any) {
         console.error('[sc] translate error', e);
         hdrEl.textContent = 'Copilot — translate error';
