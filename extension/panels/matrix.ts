@@ -19,18 +19,26 @@ export function renderMatrix(target: HTMLElement, matrix: DamageMatrix | null): 
     const existing = cellByPair.get(key);
     if (!existing || c.dmgPctMax > existing.dmgPctMax) cellByPair.set(key, c);
   }
-  let html = '<table class="sc-matrix"><thead><tr><th></th>';
-  for (const d of defenders) html += `<th>${shortName(d)}</th>`;
+  // Legend explains how to read the matrix: rows are opp Pokemon attacking,
+  // cols are your Pokemon defending. Asterisk marks chaos-modal moves (move
+  // not yet revealed, so this is a guess from Smogon usage stats).
+  let html = `<div class="sc-matrix-legend">
+    <div>rows = opp attacking · cols = your team</div>
+    <div><span class="sc-matrix-legend-chip sc-ohko">OHKO</span><span class="sc-matrix-legend-chip sc-2hko">2HKO</span><span class="sc-matrix-legend-chip sc-warn">≥50%</span><span class="sc-matrix-legend-chip">&lt;50%</span><span class="sc-matrix-legend-chip">❌ immune</span></div>
+    <div>* = chaos guess (move not yet seen) · plain = revealed</div>
+  </div>`;
+  html += '<div class="sc-matrix-scroll"><table class="sc-matrix"><thead><tr><th></th>';
+  for (const d of defenders) html += `<th title="${d}">${shortName(d)}</th>`;
   html += '</tr></thead><tbody>';
   for (const a of attackers) {
-    html += `<tr><td class="sc-row-label">${shortName(a)}</td>`;
+    html += `<tr><td class="sc-row-label" title="${a}">${shortName(a)}</td>`;
     for (const d of defenders) {
       const cell = cellByPair.get(`${a}::${d}`);
       html += renderCell(cell);
     }
     html += '</tr>';
   }
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   target.innerHTML = html;
 }
 

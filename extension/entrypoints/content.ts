@@ -140,9 +140,22 @@ export default defineContentScript({
       #sc-note-modal .sc-note-hint {
         color: #888; font-size: 10px; margin-top: 6px;
       }
-      #sc-panel .sc-matrix { width: 100%; border-collapse: collapse; font-size: 10px; }
+      #sc-panel .sc-matrix-legend {
+        font-size: 10px; color: #888; margin: 4px 0 6px 0;
+        line-height: 1.5;
+      }
+      #sc-panel .sc-matrix-legend-chip {
+        display: inline-block; padding: 1px 4px; margin-right: 4px;
+        border: 1px solid #2a2a2a; border-radius: 2px;
+        font-size: 9px;
+      }
+      #sc-panel .sc-matrix-scroll {
+        overflow-x: auto; max-width: 100%;
+      }
+      #sc-panel .sc-matrix { border-collapse: collapse; font-size: 10px; }
       #sc-panel .sc-matrix th, #sc-panel .sc-matrix td {
-        padding: 2px 3px; border: 1px solid #2a2a2a; text-align: center;
+        padding: 2px 4px; border: 1px solid #2a2a2a; text-align: center;
+        white-space: nowrap;
       }
       #sc-panel .sc-matrix .sc-row-label { text-align: left; color: #aaa; }
       #sc-panel .sc-matrix .sc-immune { color: #666; }
