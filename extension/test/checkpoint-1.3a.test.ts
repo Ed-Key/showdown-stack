@@ -108,9 +108,14 @@ describe('checkpoint 1.3a — damage matrix vs known benchmarks', () => {
     });
     const cell = m.cells[0];
     console.log('[1.3a 50%]', cell);
-    // Volcarona Bug Buzz vs 252 HP / 252+ SpD Lando-T: ~40-50% range
-    expect(cell.dmgPctMax).toBeGreaterThanOrEqual(35);
-    expect(cell.dmgPctMin).toBeLessThanOrEqual(55);
+    // With Fix #1 (own-team exact stats), the defender's snapshot stats
+    // (hp:394, spd:287) are now used directly via overrides.baseStats. That
+    // matches Smogon's published "252+ SpA LO Volcarona Bug Buzz vs.
+    // 252 HP / 252+ SpD Landorus-Therian: 23.5 - 27.4%" much more closely
+    // than the old heuristic's 252 HP / 128/128 mixed bulk approximation.
+    expect(cell.dmgPctMax).toBeGreaterThanOrEqual(22);
+    expect(cell.dmgPctMax).toBeLessThanOrEqual(32);
+    expect(cell.dmgPctMin).toBeGreaterThanOrEqual(18);
   });
 
   it('Resisted: LO Greninja Hydro Pump vs 248/252+ Toxapex (resists Water + bulk)', () => {
@@ -136,12 +141,14 @@ describe('checkpoint 1.3a — damage matrix vs known benchmarks', () => {
     });
     const cell = m.cells[0];
     console.log('[1.3a resisted]', cell);
-    // Tight band around calc's 20-24% — proves the resistance is being
-    // applied (without resist this would be 40-50%) and that walling EVs
-    // are being inferred from the snapshot stats (without HP investment
-    // it would be 24-30% on a 0/0 Toxapex).
-    expect(cell.dmgPctMax).toBeGreaterThanOrEqual(18);
-    expect(cell.dmgPctMax).toBeLessThanOrEqual(28);
+    // With Fix #1, defender Toxapex now uses its snapshot's exact stats via
+    // overrides.baseStats (hp:304, spd:304 — note this is NOT a true 252+ SpD
+    // spread, which would give spd≈421; the snapshot here has lighter SpD
+    // investment). So the cell value reflects the snapshot truthfully,
+    // landing in the 25-30% band rather than the heuristic's 28-33%.
+    // Resistance is still confirmed (without resist this would be ~50%).
+    expect(cell.dmgPctMax).toBeGreaterThanOrEqual(24);
+    expect(cell.dmgPctMax).toBeLessThanOrEqual(34);
   });
 
   it('Immune: Earthquake vs Levitate Bronzong', () => {

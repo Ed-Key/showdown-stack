@@ -32,11 +32,14 @@ export function buildDamageMatrix(opts: {
 }): DamageMatrix {
   const gen = Generations.get(9);
   const cells: MatrixCell[] = [];
+  // Reset the once-per-batch warn flag so users see one warning per matrix
+  // build if their snapshot stats stop matching the synthesized base stats.
+  warnedSnapStatMismatch = false;
   for (const atk of opts.attackers) {
     for (const def of opts.defenders) {
       const moves = movesForMon(atk, opts.beliefByDefender?.[normalizeName(atk.species)]);
       for (const moveSpec of moves) {
-        cells.push(computeCell(gen, atk, def, moveSpec, opts.field));
+        cells.push(computeCell(gen, atk, def, moveSpec, opts.field, opts.attackerSide));
       }
     }
   }
@@ -136,33 +139,104 @@ function canonicalItem(
   return (found?.name as unknown as string) ?? raw;
 }
 
+// Module-level flag so we only warn once per buildDamageMatrix() call when
+// the stat-back-solve fails verification. Reset at the top of every build.
+let warnedSnapStatMismatch = false;
+
+// For the "mine" side, the snapshot carries true Showdown-computed stats.
+// We back-solve a synthetic baseStats override that, with EVs=0/IVs=31/Hardy,
+// produces rawStats matching the snapshot within ±1 (integer rounding).
+// This avoids the heuristic guessing wrong (e.g. constructing a 252 SpA Modest
+// Heatran when the user actually runs a 252 HP / 252+ SpD Calm wall).
+//
+// Stat formula (gen 3+, neutral nature, IV=31, EV=0):
+//   HP    = floor(((2B + 31) * L) / 100) + L + 10
+//   Other = floor(((2B + 31) * L) / 100) + 5
+// Inverting (and accepting ±1 rounding error):
+//   B_hp = round(((stat - L - 10) * 100 / L - 31) / 2)
+//   B_X  = round(((stat - 5) * 100 / L - 31) / 2)
+function buildPokemonForCalc(
+  gen: ReturnType<typeof Generations.get>,
+  snap: PokemonSnapshot,
+  role: 'attacker' | 'defender',
+  isMine: boolean,
+): Pokemon {
+  const commonOpts: any = {
+    level: snap.level,
+    item: canonicalItem(gen, snap.item) as any,
+    ability: canonicalAbility(gen, snap.ability) as any,
+    teraType: snap.terastallized && snap.teraType ? (snap.teraType as any) : undefined,
+  };
+  if (role === 'defender') {
+    commonOpts.curHP = snap.hp;
+  }
+
+  if (isMine) {
+    const L = Math.max(1, snap.level);
+    const back = {
+      hp: Math.round(((snap.maxhp - L - 10) * 100 / L - 31) / 2),
+      atk: Math.round(((snap.attack - 5) * 100 / L - 31) / 2),
+      def: Math.round(((snap.defense - 5) * 100 / L - 31) / 2),
+      spa: Math.round(((snap.specialAttack - 5) * 100 / L - 31) / 2),
+      spd: Math.round(((snap.specialDefense - 5) * 100 / L - 31) / 2),
+      spe: Math.round(((snap.speed - 5) * 100 / L - 31) / 2),
+    };
+    const synth = new Pokemon(gen, snap.species, {
+      ...commonOpts,
+      nature: 'Hardy' as any,
+      evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 },
+      ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+      overrides: { baseStats: back } as any,
+    });
+    // Verify ±1; if mismatch, fall through to the heuristic path with a
+    // single warning per build batch so we never throw.
+    const ok =
+      Math.abs(synth.rawStats.hp - snap.maxhp) <= 1 &&
+      Math.abs(synth.rawStats.atk - snap.attack) <= 1 &&
+      Math.abs(synth.rawStats.def - snap.defense) <= 1 &&
+      Math.abs(synth.rawStats.spa - snap.specialAttack) <= 1 &&
+      Math.abs(synth.rawStats.spd - snap.specialDefense) <= 1 &&
+      Math.abs(synth.rawStats.spe - snap.speed) <= 1;
+    if (ok) return synth;
+    if (!warnedSnapStatMismatch) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[damage-matrix] back-solved baseStats off by >1 for own-side mon; falling back to heuristic',
+        { species: snap.species, snap, synth: synth.rawStats },
+      );
+      warnedSnapStatMismatch = true;
+    }
+    // fall through to heuristic
+  }
+
+  // Heuristic path (opp side, or own-side fallback when verification fails).
+  if (role === 'attacker') {
+    const atkEvs = attackerEvs(snap);
+    return new Pokemon(gen, snap.species, {
+      ...commonOpts,
+      nature: natureFor(snap) as any,
+      evs: { hp: 0, atk: atkEvs.atk, def: 0, spa: atkEvs.spa, spd: 0, spe: 4 },
+    });
+  }
+  const defEvs = defenderEvs(snap);
+  return new Pokemon(gen, snap.species, {
+    ...commonOpts,
+    nature: defenderNature(snap) as any,
+    evs: defEvs,
+  });
+}
+
 function computeCell(
   gen: ReturnType<typeof Generations.get>,
   atk: PokemonSnapshot,
   def: PokemonSnapshot,
   moveSpec: { id: string; source: 'revealed' | 'modal'; pct?: number },
   field: { weather: string; terrain: string },
+  attackerSide: 'mine' | 'opp',
 ): MatrixCell {
   try {
-    const atkEvs = attackerEvs(atk);
-    const defEvs = defenderEvs(def);
-    const attacker = new Pokemon(gen, atk.species, {
-      level: atk.level,
-      item: canonicalItem(gen, atk.item) as any,
-      ability: canonicalAbility(gen, atk.ability) as any,
-      teraType: atk.terastallized && atk.teraType ? (atk.teraType as any) : undefined,
-      nature: natureFor(atk) as any,
-      evs: { hp: 0, atk: atkEvs.atk, def: 0, spa: atkEvs.spa, spd: 0, spe: 4 },
-    });
-    const defender = new Pokemon(gen, def.species, {
-      level: def.level,
-      item: canonicalItem(gen, def.item) as any,
-      ability: canonicalAbility(gen, def.ability) as any,
-      teraType: def.terastallized && def.teraType ? (def.teraType as any) : undefined,
-      nature: defenderNature(def) as any,
-      evs: defEvs,
-      curHP: def.hp,
-    });
+    const attacker = buildPokemonForCalc(gen, atk, 'attacker', attackerSide === 'mine');
+    const defender = buildPokemonForCalc(gen, def, 'defender', attackerSide === 'opp');
     const move = new Move(gen, moveSpec.id);
     const fieldOpts: any = {};
     if (field.weather) fieldOpts.weather = field.weather;
