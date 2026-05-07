@@ -12,6 +12,10 @@ import {
   TYPE_CHART, DEFAULT_SC, STATUS,
 } from '../lib/translate';
 import { snapshotState, snapshotSide } from '../lib/snapshot';
+import { mountExpandableCard } from '../lib/tabs';
+import { fetchBeliefSnapshot } from '../lib/belief-snapshot';
+import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
+import { renderMatrix } from '../panels/matrix';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -136,6 +140,16 @@ export default defineContentScript({
       #sc-note-modal .sc-note-hint {
         color: #888; font-size: 10px; margin-top: 6px;
       }
+      #sc-panel .sc-matrix { width: 100%; border-collapse: collapse; font-size: 10px; }
+      #sc-panel .sc-matrix th, #sc-panel .sc-matrix td {
+        padding: 2px 3px; border: 1px solid #2a2a2a; text-align: center;
+      }
+      #sc-panel .sc-matrix .sc-row-label { text-align: left; color: #aaa; }
+      #sc-panel .sc-matrix .sc-immune { color: #666; }
+      #sc-panel .sc-matrix .sc-warn { background: #4a3a1f; }
+      #sc-panel .sc-matrix .sc-2hko { background: #5a3a1f; }
+      #sc-panel .sc-matrix .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
+      #sc-panel .sc-matrix-empty { color: #888; font-style: italic; padding: 4px; }
     `;
     document.head.appendChild(style);
     document.body.appendChild(panel);
@@ -151,6 +165,47 @@ export default defineContentScript({
     const notesBodyEl = panel.querySelector<HTMLDivElement>('.sc-notes-body')!;
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
     const battleNoteTextarea = panel.querySelector<HTMLTextAreaElement>('.sc-battle-note')!;
+
+    // ---- Damage matrix card --------------------------------------------
+    // Expandable card showing opp→us damage % per (attacker, defender) pair,
+    // computed via @smogon/calc with belief-driven move/item/spread choices.
+    // Refreshed on toggle-to-expand and on every successful decision render
+    // (only when expanded — avoids the calc cost when collapsed).
+    const matrixCard = mountExpandableCard(cardsRoot, 'matrix', '⚔ Damage matrix');
+    let lastMatrix: DamageMatrix | null = null;
+
+    async function refreshMatrix(b: any, br: any): Promise<void> {
+      if (!b || !br?.id) return;
+      const myTeam = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+      const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
+      if (!myTeam.length || !oppTeam.length) {
+        lastMatrix = null;
+        renderMatrix(matrixCard.body, null);
+        return;
+      }
+      const snap = await fetchBeliefSnapshot('http://localhost:7271', br.id);
+      const beliefByOpp: Record<string, any> = {};
+      for (const [species, b2] of Object.entries(snap?.opponents || {})) {
+        beliefByOpp[species] = b2;
+      }
+      // Stage 1: render opp-attacking-mine only — most useful threat view.
+      // Stage 1.5 will add the symmetric matrix for team-preview lead pick.
+      lastMatrix = buildDamageMatrix({
+        attackers: oppTeam, defenders: myTeam,
+        beliefByDefender: beliefByOpp,
+        field: { weather: detectWeather(b) || '', terrain: detectTerrain(b) || '' },
+        attackerSide: 'opp',
+      });
+      renderMatrix(matrixCard.body, lastMatrix);
+    }
+
+    // Refresh when user expands the card (avoids work when collapsed).
+    matrixCard.toggleBtn.addEventListener('click', () => {
+      if (matrixCard.isExpanded) {
+        const room = win.app?.curRoom;
+        if (room?.battle && room?.id) refreshMatrix(room.battle, room);
+      }
+    });
 
     // ---- Annotation feature ---------------------------------------------
     // Per-turn notes (keyboard 'N') + per-battle freeform notes (textarea).
@@ -834,6 +889,7 @@ export default defineContentScript({
         console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
         requestAnalysis(payload, record);
         lastKey = key;
+        if (matrixCard.isExpanded) refreshMatrix(b, br);
       } catch (e: any) {
         console.error('[sc] translate error', e);
         hdrEl.textContent = 'Copilot — translate error';
