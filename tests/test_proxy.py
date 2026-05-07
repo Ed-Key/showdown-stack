@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -325,6 +326,143 @@ def sample_belief_state(belief_chaos):
 def client():
     from fastapi.testclient import TestClient
     return TestClient(proxy.app)
+
+
+# ---- /explain endpoint tests ---------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_explain_cache():
+    """Clear the LRU cache between tests so identical (battle_id, turn, rqid)
+    requests don't cross-pollinate the cache from a prior test case."""
+    proxy._explain_cache.clear()
+    yield
+    proxy._explain_cache.clear()
+
+
+def _explain_body(**overrides):
+    """Default valid body for POST /explain. Override any field as kwargs."""
+    body = {
+        "battle_id": "b-explain-1",
+        "turn": 5,
+        "rqid": 12,
+        "snapshot": {
+            "mine": {
+                "activeSpecies": "Heatran",
+                "activeHp": 80,
+                "activeAbility": "Flash Fire",
+                "activeItem": "Leftovers",
+                "activeMoves": ["Magma Storm", "Earth Power", "Taunt", "Stealth Rock"],
+            },
+            "opp": {
+                "activeSpecies": "Garchomp",
+                "activeHp": 100,
+                "activeBoosts": {"atk": 1},
+            },
+            "weather": {"weatherType": "sand", "turnsRemaining": 4},
+            "terrain": {"terrainType": "none", "turnsRemaining": -1},
+            "trickRoom": False,
+        },
+        "engine_result": {
+            "bestMove": "uturn",
+            "confidence": 0.47,
+            "sims": 1500000,
+            "depth": 4,
+            "pv": ["uturn", "earthquake"],
+            "alternatives": [
+                {"move": "magmastorm", "confidence": 0.45},
+                {"move": "switch tyranitar", "confidence": 0.41},
+            ],
+        },
+        "last_steps": [
+            "|move|p1a: Heatran|Magma Storm|p2a: Garchomp",
+            "|-damage|p2a: Garchomp|65/100",
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+async def test_explain_returns_string_and_caches(client, monkeypatch):
+    """First call hits the LLM; second identical call hits the cache and the
+    LLM is NOT invoked again. Validates both happy-path return AND the cache
+    semantics that protect against accidental double-billing during repeated
+    UI requests for the same turn."""
+    fake_llm = AsyncMock()
+    fake_llm.complete.return_value = "test explanation"
+    monkeypatch.setattr(proxy, "_llm", fake_llm)
+
+    body = _explain_body()
+    r1 = client.post("/explain", json=body)
+    assert r1.status_code == 200, r1.text
+    payload1 = r1.json()
+    assert payload1["explanation"] == "test explanation"
+    assert payload1["cached"] is False
+
+    r2 = client.post("/explain", json=body)
+    assert r2.status_code == 200
+    payload2 = r2.json()
+    assert payload2["explanation"] == "test explanation"
+    assert payload2["cached"] is True
+    assert fake_llm.complete.call_count == 1
+
+
+def test_explain_503_when_llm_missing(client, monkeypatch):
+    """When no GROQ_API_KEY was found at startup `_llm` is None; /explain
+    must return 503 instead of crashing or silently returning empty text."""
+    monkeypatch.setattr(proxy, "_llm", None)
+    r = client.post("/explain", json=_explain_body())
+    assert r.status_code == 503
+    assert "GROQ_API_KEY" in r.json()["detail"]
+
+
+def test_explain_prompt_includes_matrix_summary(client, monkeypatch):
+    """When matrix_summary is present, the rendered user prompt must include
+    the threat lines (attacker, move, target). Captures the prompt via the
+    mock's call args so we assert on what actually went to Groq."""
+    captured = {}
+
+    async def _fake_complete(system, user, max_tokens=400):
+        captured["system"] = system
+        captured["user"] = user
+        return "matrix-aware explanation"
+
+    fake_llm = AsyncMock()
+    fake_llm.complete.side_effect = _fake_complete
+    monkeypatch.setattr(proxy, "_llm", fake_llm)
+
+    body = _explain_body(
+        battle_id="b-matrix-1",
+        matrix_summary={
+            "opp_attacks_me": [
+                {
+                    "opp": "Garchomp", "move": "Earthquake",
+                    "source": "revealed", "target": "Tyranitar",
+                    "dmg_pct_max": 142, "ohko": True, "two_hko": False,
+                },
+            ],
+            "me_attacks_opp": [
+                {
+                    "me": "Gholdengo", "move": "Make It Rain",
+                    "source": "revealed", "target": "Garchomp",
+                    "dmg_pct_max": 78, "ohko": False, "two_hko": True,
+                },
+            ],
+        },
+    )
+    r = client.post("/explain", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["explanation"] == "matrix-aware explanation"
+
+    user_prompt = captured["user"]
+    # Section header + both directions + key cell content.
+    assert "Damage Matrix" in user_prompt
+    assert "Garchomp Earthquake" in user_prompt
+    assert "Tyranitar" in user_prompt
+    assert "OHKO" in user_prompt
+    assert "Gholdengo Make It Rain" in user_prompt
+    assert "78%" in user_prompt
+    # System prompt must carry the grounding rules so they reach the LLM.
+    assert "GROUNDING RULES" in captured["system"]
 
 
 def test_get_belief_returns_per_opp_revealed_and_modal(client, sample_belief_state):
