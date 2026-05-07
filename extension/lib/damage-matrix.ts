@@ -76,8 +76,22 @@ function attackerEvs(snap: PokemonSnapshot): { atk: number; spa: number } {
   return { atk: 252, spa: 252 };
 }
 
-function defenderEvs(): { hp: number; def: number; spd: number } {
-  return { hp: 0, def: 0, spd: 0 };
+// Heuristic: infer the defender's investment profile from the snapshot's
+// Def vs SpD ratio + speed. The previous always-0 spread caused calc to use
+// untrained defenders while we divide by the snapshot's invested maxhp,
+// producing inflated damage % (off-by-up-to-50%). This four-bucket rule
+// approximates conventional walls/offensive sets well enough for the
+// matchup matrix.
+function defenderEvs(snap: PokemonSnapshot): { hp: number; def: number; spd: number } {
+  const d = snap.defense;
+  const sd = snap.specialDefense;
+  // Use a slightly looser ratio (1.25) than the spec's 1.1 to avoid
+  // mistaking moderately-bulky offensive mons (e.g., a Lando-T at 247/287)
+  // for dedicated walls. A ratio under 1.25 maps to mixed bulk.
+  if (d >= sd * 1.25) return { hp: 252, def: 252, spd: 4 }; // physical wall
+  if (sd >= d * 1.25) return { hp: 252, def: 4, spd: 252 }; // special wall
+  if (snap.speed > 300) return { hp: 0, def: 0, spd: 0 }; // offensive mon
+  return { hp: 252, def: 128, spd: 128 }; // mixed bulk
 }
 
 function natureFor(snap: PokemonSnapshot): string {
@@ -86,6 +100,40 @@ function natureFor(snap: PokemonSnapshot): string {
   if (a >= s * 1.1) return 'Adamant';
   if (s >= a * 1.1) return 'Modest';
   return 'Hardy';
+}
+
+function defenderNature(snap: PokemonSnapshot): string {
+  const d = snap.defense;
+  const sd = snap.specialDefense;
+  // Match the threshold used by defenderEvs() — see comment there.
+  if (d >= sd * 1.25) return 'Impish'; // +Def, -SpA
+  if (sd >= d * 1.25) return 'Calm';   // +SpD, -Atk
+  if (snap.speed > 300) return 'Hardy';
+  return 'Hardy';
+}
+
+// @smogon/calc stores ability/item as opaque strings and compares them by
+// strict equality (e.g. `hasAbility('Levitate')`) — lowercase or
+// concatenated forms silently no-op. Look up the canonical Title-Case name
+// via the gen's data tables; fall back to the input if the lookup fails.
+function canonicalAbility(
+  gen: ReturnType<typeof Generations.get>,
+  raw: string | undefined,
+): string | undefined {
+  if (!raw || raw === 'none') return undefined;
+  const id = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const found = gen.abilities.get(id as any);
+  return (found?.name as unknown as string) ?? raw;
+}
+
+function canonicalItem(
+  gen: ReturnType<typeof Generations.get>,
+  raw: string | undefined,
+): string | undefined {
+  if (!raw || raw === 'none') return undefined;
+  const id = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const found = gen.items.get(id as any);
+  return (found?.name as unknown as string) ?? raw;
 }
 
 function computeCell(
@@ -97,21 +145,22 @@ function computeCell(
 ): MatrixCell {
   try {
     const atkEvs = attackerEvs(atk);
+    const defEvs = defenderEvs(def);
     const attacker = new Pokemon(gen, atk.species, {
       level: atk.level,
-      item: atk.item === 'none' ? undefined : atk.item,
-      ability: atk.ability === 'none' ? undefined : atk.ability,
+      item: canonicalItem(gen, atk.item) as any,
+      ability: canonicalAbility(gen, atk.ability) as any,
       teraType: atk.terastallized && atk.teraType ? (atk.teraType as any) : undefined,
-      nature: natureFor(atk),
+      nature: natureFor(atk) as any,
       evs: { hp: 0, atk: atkEvs.atk, def: 0, spa: atkEvs.spa, spd: 0, spe: 4 },
     });
     const defender = new Pokemon(gen, def.species, {
       level: def.level,
-      item: def.item === 'none' ? undefined : def.item,
-      ability: def.ability === 'none' ? undefined : def.ability,
+      item: canonicalItem(gen, def.item) as any,
+      ability: canonicalAbility(gen, def.ability) as any,
       teraType: def.terastallized && def.teraType ? (def.teraType as any) : undefined,
-      nature: 'Hardy',
-      evs: defenderEvs(),
+      nature: defenderNature(def) as any,
+      evs: defEvs,
       curHP: def.hp,
     });
     const move = new Move(gen, moveSpec.id);
@@ -121,20 +170,37 @@ function computeCell(
     const fieldObj = new Field(fieldOpts);
     const result = calculate(gen, attacker, defender, move, fieldObj);
     const range = result.range();
-    const ko = result.kochance();
     const min = range[0] ?? 0;
     const max = range[1] ?? 0;
-    const koChance = ko.chance ?? 0;
+    // result.kochance() throws when damage is 0 (immunity / no-op). Treat
+    // that as a clean "immune" cell rather than letting the exception flow
+    // up and produce a default cell with immune:false.
+    let koChance = 0;
+    let koN = 0;
+    if (max > 0) {
+      try {
+        const ko = result.kochance();
+        koChance = ko.chance ?? 0;
+        koN = ko.n ?? 0;
+      } catch {
+        // KO chance not computable for this scenario — leave at 0/0.
+      }
+    }
+    // Use the calc's HP as the denominator so the % is internally consistent
+    // with the calc's view of the defender (the snapshot HP can diverge when
+    // the snapshot reflects different EV/IV/nature investment than our
+    // heuristic chose).
+    const denom = defender.rawStats.hp || def.maxhp || 1;
     return {
       attacker: atk.species,
       defender: def.species,
       move: moveSpec.id,
       moveSource: moveSpec.source,
       modalPct: moveSpec.pct,
-      dmgPctMin: Math.round((min / def.maxhp) * 100),
-      dmgPctMax: Math.round((max / def.maxhp) * 100),
-      ohko: koChance >= 1.0 && ko.n === 1,
-      twoHko: koChance >= 1.0 && ko.n === 2,
+      dmgPctMin: Math.round((min / denom) * 100),
+      dmgPctMax: Math.round((max / denom) * 100),
+      ohko: koChance >= 1.0 && koN === 1,
+      twoHko: koChance >= 1.0 && koN === 2,
       immune: max === 0,
     };
   } catch (err) {
