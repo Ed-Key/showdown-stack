@@ -675,6 +675,83 @@ export default defineContentScript({
       }));
     (win as any).__scDumpBattle = () => JSON.stringify(scHistory, null, 2);
 
+    // Debug helpers added 2026-05-08 after persist-pipeline issues. Each is
+    // safe to call from the browser console; intended for ad-hoc diagnostics.
+
+    (win as any).__scLocalStorageHealth = () => {
+      const allKeys = Object.keys(localStorage);
+      const scKeys = allKeys.filter(k => k.startsWith('sc:'));
+      const grouped: Record<string, number> = {};
+      for (const k of scKeys) {
+        const prefix = k.split(':').slice(0, 2).join(':');
+        grouped[prefix] = (grouped[prefix] || 0) + 1;
+      }
+      return {
+        totalKeys: allKeys.length,
+        scKeys: scKeys.length,
+        byPrefix: grouped,
+        postmortemKeys: scKeys.filter(k => k.startsWith('sc:postmortem:')),
+      };
+    };
+
+    // Force a postmortem write for the CURRENT battle, bypassing all the
+    // engine-final / cache-key gating. Reads scHistory + stepQueue + meta
+    // directly, runs the parser, calls persistPostMortem (which writes both
+    // localStorage and disk via the proxy /postmortem endpoint).
+    // Returns a summary of what was written.
+    (win as any).__scForcePersist = () => {
+      const room = win.app?.curRoom;
+      const b = room?.battle;
+      if (!b || !room?.id) {
+        return { ok: false, error: 'no active battle in curRoom' };
+      }
+      try {
+        const battleRecords = scHistory.filter(r => r.battleId === room.id);
+        const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
+        const pm = parseBattlePostMortem(
+          battleRecords as any,
+          (b.stepQueue || []).slice(),
+          {
+            battleId: room.id,
+            format: b.tier || 'unknown',
+            myUsername: b.mySide?.name || 'unknown',
+            mySideId,
+            opponent: b.farSide?.name || 'unknown',
+          },
+        );
+        persistPostMortem(pm, { final: true });
+        return {
+          ok: true,
+          scHistoryRecords: battleRecords.length,
+          stepQueueLen: (b.stepQueue || []).length,
+          pmTurns: pm.turns.length,
+          totalTurns: pm.totalTurns,
+        };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
+    };
+
+    // Dump everything about the current battle that the parser needs, as a
+    // single JSON blob. Useful for offline parser debugging — paste into
+    // analysis script + iterate without browser round-trips.
+    (win as any).__scDumpForParse = () => {
+      const room = win.app?.curRoom;
+      const b = room?.battle;
+      if (!b || !room?.id) return null;
+      return {
+        records: scHistory.filter(r => r.battleId === room.id),
+        stepQueue: (b.stepQueue || []).slice(),
+        meta: {
+          battleId: room.id,
+          format: b.tier || 'unknown',
+          myUsername: b.mySide?.name || 'unknown',
+          mySideId: (b.mySide?.sideid || b.mySide?.id || 'p1'),
+          opponent: b.farSide?.name || 'unknown',
+        },
+      };
+    };
+
     function pct(v: number | undefined) {
       return ((v || 0) * 100).toFixed(0) + '%';
     }
