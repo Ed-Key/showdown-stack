@@ -26,10 +26,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from showdown_copilot.belief import BeliefTracker
+from showdown_copilot.belief import BeliefTracker, _BASE_SPEEDS, _normalize
 from showdown_copilot.llm import LLMClient, build_default_llm
 from showdown_copilot.models import Distributions
 from showdown_copilot.priors import PriorsSource
+from showdown_copilot.stats import _NATURE_TO_SPE_MULT, compute_speed_stat
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,29 @@ def _apply_modal(pkmn: dict[str, Any], tracker: BeliefTracker, fmt: str) -> None
 
     if pkmn.get("teraType") == "" and modal.tera_type:
         pkmn["teraType"] = modal.tera_type
+
+    # Speed plumbing fix (2026-05-08): when the belief tracker has narrowed
+    # opp's speed range from observed turn order, OR has inferred a Choice
+    # Scarf from a forced-upgrade, recompute the modal's actual speed stat
+    # and overwrite the extension's "max-EV-Jolly" assumption. Without this
+    # the engine plays as if every opp Pokemon is 252-Spe Jolly even after
+    # we've observed they're slower (or Scarf'd faster) — causing speed
+    # bug deaths (e.g. Recover-while-OHKO'd-by-faster-opp).
+    if belief.speed_range is not None or belief.item_inferred_choicescarf:
+        base_spe = _BASE_SPEEDS.get(_normalize(species))
+        if base_spe:
+            nat_mult = _NATURE_TO_SPE_MULT.get(modal.nature, 1.0)
+            ev_spe = modal.evs.get("spe", 0)
+            spe = compute_speed_stat(base_spe, ev_spe, 31, nat_mult, 100)
+            # Choice Scarf 1.5x. Apply when belief has inferred it OR when
+            # the modal happened to land on a scarf set (item filter forced
+            # this when speed_range[0] > non-scarf max).
+            if (
+                belief.item_inferred_choicescarf
+                or _normalize(modal.item) == "choicescarf"
+            ):
+                spe = int(spe * 1.5)
+            pkmn["speed"] = spe
 
     return True
 
