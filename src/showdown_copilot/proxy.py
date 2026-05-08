@@ -555,6 +555,21 @@ _NOTES_DIR = Path(
     "/Users/edkiboma/Projects/pokemon-ai/workspace/analysis/play-notes"
 )
 
+# Where /explain JSONL syncs land. One file per UTC date, append-only. Mirrors
+# the /annotation pattern so post-hoc analysis can correlate engine recs +
+# LLM explanations + user notes from the same on-disk corpus.
+_EXPLANATIONS_DIR = Path(
+    "/Users/edkiboma/Projects/pokemon-ai/workspace/analysis/explanations"
+)
+
+
+def _llm_model_name() -> str:
+    """Best-effort model name for the explanation log. Returns 'unknown' if
+    the client doesn't expose it."""
+    if _llm is None:
+        return "none"
+    return getattr(_llm, "_model", "unknown")
+
 
 class AnnotationRequest(BaseModel):
     """Schema for POST /annotation. Extension fires this when a user saves a
@@ -1125,6 +1140,26 @@ async def explain(req: ExplainRequest) -> dict:
     _explain_cache[key] = text
     if len(_explain_cache) > _EXPLAIN_CACHE_MAX:
         _explain_cache.popitem(last=False)
+
+    # Persist to JSONL (debug-corpus). Wrapped in try/except so a disk hiccup
+    # doesn't fail the response — localStorage / cache still has the text.
+    try:
+        date = datetime.now().strftime("%Y-%m-%d")
+        out = _EXPLANATIONS_DIR / f"{date}.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        log_line = {
+            "battleId": req.battle_id,
+            "turn": req.turn,
+            "rqid": req.rqid,
+            "text": text,
+            "model": _llm_model_name(),
+            "timestampMs": int(datetime.now().timestamp() * 1000),
+        }
+        with out.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(log_line, ensure_ascii=False) + "\n")
+    except Exception as exc:  # noqa: BLE001 — never fail /explain on disk write
+        logger.warning("/explain JSONL write failed: %s", exc)
+
     return {"explanation": text, "cached": False}
 
 

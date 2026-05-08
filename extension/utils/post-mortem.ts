@@ -2,7 +2,12 @@
 // events and produces a compact per-battle post-mortem.
 // No DOM, no globals, no side effects — safe to import into Vitest.
 
-export const POSTMORTEM_SCHEMA_VERSION = 4 as const;
+export const POSTMORTEM_SCHEMA_VERSION = 5 as const;
+
+export type ConflictWarningSnapshot = {
+  level: 'strong' | 'warn' | 'pivot' | 'info';
+  message: string;
+};
 
 export type OverrideTag =
   | 'item_assumption'      // engine wrong about opp item (e.g. assumed CB, was Scarf)
@@ -101,6 +106,7 @@ export type RegularTurnDiff = {
   residualEvents: ResidualEvent[];
   userNote: string | null;
   userOverrideTag: OverrideTag | null;
+  conflictWarning: ConflictWarningSnapshot | null;
 };
 
 export type ForceSwitchTurnDiff = {
@@ -120,6 +126,7 @@ export type ForceSwitchTurnDiff = {
   residualEvents: ResidualEvent[];
   userNote: string | null;
   userOverrideTag: OverrideTag | null;
+  conflictWarning: ConflictWarningSnapshot | null;
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -138,6 +145,7 @@ export type BattlePostMortem = {
   teamPreview: { mine: string[]; opp: string[] } | null;
   turns: TurnDiff[];
   battleNote: string | null;
+  replayUrl: string | null;
 };
 
 export function parseBattlePostMortem(
@@ -188,6 +196,7 @@ export function parseBattlePostMortem(
     teamPreview: pre.teamPreview,
     turns,
     battleNote: null,
+    replayUrl: null,
   };
 }
 
@@ -461,6 +470,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     residualEvents: [...te.residualEvents],
     userNote: null,
     userOverrideTag: null,
+    conflictWarning: null,
   };
 }
 
@@ -573,6 +583,7 @@ function buildForceSwitchTurnDiff(
     residualEvents: [...residualEvents],
     userNote: null,
     userOverrideTag: null,
+    conflictWarning: null,
   };
 }
 

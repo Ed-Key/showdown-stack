@@ -638,3 +638,60 @@ def test_postmortem_format_shortcode_mappings():
     assert proxy._format_shortcode("gen9ubers") == "ubers"
     assert proxy._format_shortcode("") == "unknown"
     assert proxy._format_shortcode(None) == "unknown"  # type: ignore[arg-type]
+
+
+# ---- /explain JSONL persistence + model-name helper ----------------------
+
+def test_explain_writes_jsonl_line(client, monkeypatch, tmp_path):
+    """The /explain endpoint must append a JSONL line per call (debug-corpus
+    parity with /annotation). Validates that disk persistence runs AFTER the
+    in-memory cache write so cached calls still surface in the corpus on the
+    first hit, and the schema carries the keys downstream tools rely on."""
+    monkeypatch.setattr(proxy, "_EXPLANATIONS_DIR", tmp_path)
+
+    fake_llm = AsyncMock()
+    fake_llm.complete.return_value = "fixed-explanation-text"
+    fake_llm._model = "llama-3.3-70b-versatile"
+    monkeypatch.setattr(proxy, "_llm", fake_llm)
+
+    body = _explain_body(battle_id="b-jsonl-1", turn=3, rqid=42)
+    r = client.post("/explain", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["explanation"] == "fixed-explanation-text"
+
+    from datetime import datetime as _dt
+    out = tmp_path / f"{_dt.now().strftime('%Y-%m-%d')}.jsonl"
+    assert out.exists(), f"expected JSONL at {out}"
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[-1])
+    # Lock the schema: every key downstream tools rely on must be present.
+    assert set(record.keys()) == {
+        "battleId", "turn", "rqid", "text", "model", "timestampMs",
+    }
+    assert record["battleId"] == "b-jsonl-1"
+    assert record["turn"] == 3
+    assert record["rqid"] == 42
+    assert record["text"] == "fixed-explanation-text"
+    assert record["model"] == "llama-3.3-70b-versatile"
+    assert isinstance(record["timestampMs"], int) and record["timestampMs"] > 0
+
+
+def test_llm_model_name_helper(monkeypatch):
+    """`_llm_model_name` surfaces the model id used at call time so the JSONL
+    log can be filtered/aggregated by model. None → 'none' (proxy ran without
+    an LLM); GroqClient → its declared `_model`; missing attr → 'unknown'."""
+    monkeypatch.setattr(proxy, "_llm", None)
+    assert proxy._llm_model_name() == "none"
+
+    from showdown_copilot.llm import GroqClient
+    # Construct without hitting the network — GroqClient's __init__ instantiates
+    # AsyncGroq, which only validates the key shape (no auth call).
+    gc = GroqClient(api_key="test-key-not-used")
+    monkeypatch.setattr(proxy, "_llm", gc)
+    assert proxy._llm_model_name() == "llama-3.3-70b-versatile"
+
+    class _Bare:
+        pass
+    monkeypatch.setattr(proxy, "_llm", _Bare())
+    assert proxy._llm_model_name() == "unknown"

@@ -384,6 +384,18 @@ export default defineContentScript({
     function readTurnOverrideTag(battleId: string, turn: number): string | null {
       return localStorage.getItem(`sc:override-tag:${battleId}:${turn}`);
     }
+    function writeTurnConflictWarning(battleId: string, turn: number, warning: any) {
+      if (warning === null) return;  // don't pollute storage with nulls
+      localStorage.setItem(
+        `sc:conflict-warning:${battleId}:${turn}`,
+        JSON.stringify(warning),
+      );
+    }
+    function readTurnConflictWarning(battleId: string, turn: number): any | null {
+      const raw = localStorage.getItem(`sc:conflict-warning:${battleId}:${turn}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
     function readBattleNote(battleId: string): string {
       return localStorage.getItem(`sc:battle-note:${battleId}`) || '';
     }
@@ -550,7 +562,15 @@ export default defineContentScript({
         const note = turnNotes[String(t.turn)];
         if (note) t.userNote = note;
         t.userOverrideTag = readTurnOverrideTag(pm.battleId, t.turn) as any;
+        t.conflictWarning = readTurnConflictWarning(pm.battleId, t.turn);
       }
+      // Derive replay URL from the battle ID. Showdown IDs look like
+      // `battle-gen9nationaldex-2604189999-7lj3ryrg…`; the replay path
+      // strips the `battle-` prefix. Fall back to null when the prefix
+      // is absent (defensive against edge-case IDs from older builds).
+      pm.replayUrl = pm.battleId.startsWith('battle-')
+        ? `https://replay.pokemonshowdown.com/${pm.battleId.slice(7)}`
+        : null;
       const key = `sc:postmortem:${pm.battleId}`;
       const json = JSON.stringify(pm);
 
@@ -742,6 +762,14 @@ export default defineContentScript({
             myTeam: myTeamSnaps,
           });
           renderConflict(conflict);
+          // Persist for the post-battle overlay (debug-corpus). The helper
+          // no-ops when `conflict` is null, so we only fill storage when
+          // there's an actual warning to record.
+          const battleId = win.app?.curRoom?.id;
+          if (battleId) {
+            const turn = b?.turn ?? 0;
+            if (conflict) writeTurnConflictWarning(battleId, turn, conflict);
+          }
         } else {
           renderConflict(null);
         }

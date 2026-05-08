@@ -1004,7 +1004,7 @@ describe('parseBattlePostMortem — Phase 2 integration', () => {
   });
 });
 
-describe('parseBattlePostMortem — annotation fields (schema v4)', () => {
+describe('parseBattlePostMortem — annotation fields (schema v5)', () => {
   const stepQueue = [
     '|gametype|singles',
     '|player|p1|Opp|1|',
@@ -1028,8 +1028,8 @@ describe('parseBattlePostMortem — annotation fields (schema v4)', () => {
 
   const pm = parseBattlePostMortem(records, stepQueue, META);
 
-  it('schemaVersion is 4', () => {
-    expect(pm.schemaVersion).toBe(4);
+  it('schemaVersion is 5', () => {
+    expect(pm.schemaVersion).toBe(5);
   });
   it('battleNote defaults to null on a fresh postmortem', () => {
     expect(pm.battleNote).toBeNull();
@@ -1043,5 +1043,13 @@ describe('parseBattlePostMortem — annotation fields (schema v4)', () => {
     for (const t of pm.turns) {
       expect(t.userOverrideTag).toBeNull();
     }
+  });
+  it('conflictWarning defaults to null on each turn diff', () => {
+    for (const t of pm.turns) {
+      expect(t.conflictWarning).toBeNull();
+    }
+  });
+  it('replayUrl defaults to null on a fresh postmortem (parser default)', () => {
+    expect(pm.replayUrl).toBeNull();
   });
 });
