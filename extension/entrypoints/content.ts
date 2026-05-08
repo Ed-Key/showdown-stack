@@ -824,11 +824,49 @@ export default defineContentScript({
           if (lastBeliefSnapshot) writeTurnBeliefSnapshot(battleId, turn, lastBeliefSnapshot);
           const summary = buildMatrixSummary();
           if (summary !== undefined) writeTurnMatrixSummary(battleId, turn, summary);
+
+          // Defense-in-depth: ensure scHistory has a record for THIS turn
+          // before we parse. The poll-loop push at scHistory.push(record)
+          // can miss turns where Showdown's rqid stays stuck (force-switch
+          // chains, status-induced no-decision turns). Without this guard
+          // the postmortem.turns array silently truncates at the last
+          // poll-loop-pushed turn while engine.log keeps growing.
+          // Observed in the dhtxdty 2026-05-08 battle: postmortem had 5
+          // records, engine.log had 12 turns of instrument data.
+          const req = (win.app?.curRoom?.request || b?.request);
+          const rqid = req?.rqid ?? 0;
+          const alreadyTracked = scHistory.some(
+            r => r.battleId === battleId && r.turn === turn && r.rqid === rqid,
+          );
+          if (!alreadyTracked && record) {
+            // record was passed in but didn't make it into scHistory — push
+            // it now. Most often this means the poll loop's cache-skip path
+            // fired and we never hit the post-push site at line ~1299.
+            console.log(`[sc:postmortem] backfilling scHistory for T${turn} rqid=${rqid} (poll-loop missed)`);
+            scHistory.push(record);
+          } else if (!alreadyTracked && !record) {
+            // No record handle to push; create a minimal stub so the parser
+            // sees this turn even without payload/state context.
+            console.log(`[sc:postmortem] stubbing scHistory for T${turn} rqid=${rqid} (no record + poll-loop missed)`);
+            const stub: DecisionRecord = {
+              battleId,
+              turn,
+              rqid,
+              tStartMs: Date.now(),
+              forceSwitch: !!req?.forceSwitch,
+              state: snapshotState(b),
+              payload: null as any,
+              updates: [u],
+            };
+            stub.final = u;
+            stub.tEndMs = Date.now();
+            scHistory.push(stub);
+          }
         }
         // Soft-persist the in-progress postmortem so navigating away mid-battle
-        // doesn't lose data. localStorage only — disk POST stays gated on the
-        // battle-end trigger in the poll loop (see persistPostMortem `final`
-        // arg). Mirrors the parse call shape used by the dump path below.
+        // doesn't lose data. Disk POST happens too (Fix B 2026-05-08:
+        // proxy /postmortem detects same-battleId and overwrites — per-turn
+        // POSTs converge to one file per battle).
         if (b && battleId) {
           try {
             const battleRecords = scHistory.filter(r => r.battleId === battleId);
@@ -844,6 +882,7 @@ export default defineContentScript({
                 opponent: b.farSide?.name || 'unknown',
               },
             );
+            console.log(`[sc:postmortem] soft persist: ${battleRecords.length} records → ${pm.turns.length} turns in pm`);
             persistPostMortem(pm, { final: false });
           } catch (err) {
             console.warn('[sc:postmortem] soft persist failed', err);
