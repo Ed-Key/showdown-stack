@@ -553,6 +553,18 @@ export default defineContentScript({
       }
       const key = `sc:postmortem:${pm.battleId}`;
       const json = JSON.stringify(pm);
+
+      // Fire-and-forget mirror to disk via proxy. localStorage remains the
+      // canonical client-side store; this is the engine-debug corpus path.
+      // Placed BEFORE the localStorage try so the disk write happens even if
+      // QuotaExceededError forces us into the prune-and-retry path below.
+      fetch('http://localhost:7271/postmortem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: true,
+      }).catch(() => { /* proxy down — localStorage still has it */ });
+
       try {
         localStorage.setItem(key, json);
         return;

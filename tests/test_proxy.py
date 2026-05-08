@@ -541,3 +541,100 @@ def test_annotation_without_override_tag_writes_null(client, monkeypatch, tmp_pa
     record = json.loads(raw)
     assert record["overrideTag"] is None
     assert record["kind"] == "battle"
+
+
+# ---- /postmortem endpoint tests ------------------------------------------
+
+def test_postmortem_writes_file_and_manifest(client, monkeypatch, tmp_path):
+    """A valid postmortem POST creates a JSON file at the expected smart
+    filename and appends a corresponding line to manifest.jsonl. This is the
+    engine-debug corpus: future Claude sessions read these to analyze losses."""
+    monkeypatch.setattr(proxy, "_POSTMORTEM_DIR", tmp_path)
+    monkeypatch.setattr(proxy, "_MANIFEST_PATH", tmp_path / "manifest.jsonl")
+
+    body = {
+        "schemaVersion": 4,
+        "battleId": "battle-gen9nationaldex-2597691096",
+        "format": "[Gen 9] National Dex",
+        "opponent": "Archon6",
+        "winner": "Archon6",
+        "totalTurns": 14,
+        "endedAtMs": 1746124912000,
+        "turns": [],
+    }
+    r = client.post("/postmortem", json=body)
+    assert r.status_code == 200, r.text
+    resp = r.json()
+    assert resp["ok"] is True
+    fname = resp["file"]
+    # Filename pattern: YYYY-MM-DD-HHMM-archon6-natdex-XXXXXXXX.json
+    assert fname.endswith(".json")
+    assert "archon6" in fname
+    assert "natdex" in fname
+
+    out_file = tmp_path / fname
+    assert out_file.exists(), f"expected postmortem JSON at {out_file}"
+    written = json.loads(out_file.read_text(encoding="utf-8"))
+    assert written["battleId"] == body["battleId"]
+    assert written["opponent"] == "Archon6"
+
+    manifest = tmp_path / "manifest.jsonl"
+    assert manifest.exists()
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[-1])
+    assert entry["battleId"] == body["battleId"]
+    assert entry["file"] == fname
+    assert entry["opponent"] == "Archon6"
+    assert entry["format"] == "[Gen 9] National Dex"
+    assert entry["endedAtMs"] == 1746124912000
+    assert entry["totalTurns"] == 14
+    assert entry["winner"] == "Archon6"
+    assert entry["schemaVersion"] == 4
+
+
+def test_postmortem_filename_format(monkeypatch, tmp_path):
+    """The filename builder produces the documented pattern. Locks the format
+    so future readers (Claude sessions, ls -1, glob patterns) stay stable."""
+    body = {
+        "endedAtMs": 1746124912000,
+        "opponent": "Archon6",
+        "format": "[Gen 9] National Dex",
+        "battleId": "battle-gen9nationaldex-2597691096",
+    }
+    fname = proxy._build_postmortem_filename(body)
+    # Pattern: YYYY-MM-DD-HHMM-archon6-natdex-XXXXXXXX.json
+    import re
+    m = re.match(
+        r"^\d{4}-\d{2}-\d{2}-\d{4}-archon6-natdex-[a-z0-9]{1,8}\.json$",
+        fname,
+    )
+    assert m is not None, f"filename did not match pattern: {fname}"
+    # Suffix is last 8 chars of "battle-gen9nationaldex-2597691096" → "97691096".
+    assert fname.endswith("-97691096.json"), fname
+
+
+def test_postmortem_400_on_missing_battle_id(client, monkeypatch, tmp_path):
+    """POST without battleId is rejected with 400. Guards against malformed
+    extension payloads or rogue clients filling the corpus with junk files."""
+    monkeypatch.setattr(proxy, "_POSTMORTEM_DIR", tmp_path)
+    monkeypatch.setattr(proxy, "_MANIFEST_PATH", tmp_path / "manifest.jsonl")
+
+    body = {"opponent": "Someone", "format": "gen9ou"}
+    r = client.post("/postmortem", json=body)
+    assert r.status_code == 400
+    err = r.json()
+    assert err.get("ok") is False
+    assert "battleId" in (err.get("error") or "")
+
+
+def test_postmortem_format_shortcode_mappings():
+    """Spot-check the format shortcode mapping. These are the values that end
+    up in filenames; if they drift, ls-grouping by format breaks."""
+    assert proxy._format_shortcode("gen9nationaldex") == "natdex"
+    assert proxy._format_shortcode("gen9ou") == "ou"
+    assert proxy._format_shortcode("[Gen 9] National Dex AG") == "natdexag"
+    assert proxy._format_shortcode("gen9nationaldexag") == "natdexag"
+    assert proxy._format_shortcode("gen9ubers") == "ubers"
+    assert proxy._format_shortcode("") == "unknown"
+    assert proxy._format_shortcode(None) == "unknown"  # type: ignore[arg-type]

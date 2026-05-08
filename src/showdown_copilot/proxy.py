@@ -587,6 +587,100 @@ async def save_annotation(req: AnnotationRequest) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# --- /postmortem endpoint --------------------------------------------------
+# Auto-persist battle postmortems to disk so future Claude analysis sessions
+# can read them. The extension fires this fire-and-forget after writing to
+# localStorage (which remains the canonical client-side store). If the proxy
+# is down, localStorage still has it and the user can recover later.
+_POSTMORTEM_DIR = Path(
+    "/Users/edkiboma/Projects/pokemon-ai/workspace/analysis/battle-postmortems"
+)
+_MANIFEST_PATH = _POSTMORTEM_DIR / "manifest.jsonl"
+
+
+def _format_shortcode(fmt: str) -> str:
+    """Map full format string to short slug for filenames.
+
+    Examples:
+        "[Gen 9] National Dex" -> "natdex"
+        "gen9nationaldexag" -> "natdexag"
+        "gen9ou" -> "ou"
+        "gen9ubers" -> "ubers"
+    """
+    s = (fmt or "unknown").lower()
+    s = s.removeprefix("[gen 9] ").removeprefix("[gen 8] ")
+    s = s.removeprefix("gen9").removeprefix("gen8")
+    # Common name swaps — apply before alnum-strip so multi-word forms resolve.
+    s = s.replace("national dex", "natdex").replace("nationaldex", "natdex")
+    # Strip non-alphanum (spaces, brackets, punctuation).
+    return "".join(c for c in s if c.isalnum()) or "unknown"
+
+
+def _safe_slug(s: str) -> str:
+    return "".join(c for c in s.lower() if c.isalnum()) or "unknown"
+
+
+def _build_postmortem_filename(pm: dict) -> str:
+    """Build a smart filename from postmortem metadata.
+
+    Pattern: ``YYYY-MM-DD-HHMM-<opponent>-<formatShort>-<battleIdSuffix>.json``
+
+    Sorts chronologically with ``ls -1``, opponent visible at glance, no
+    overwrites on rematch. Falls back to current time when ``endedAtMs`` is
+    missing/invalid (fresh-from-the-browser quirks).
+    """
+    ended_ms = pm.get("endedAtMs") or pm.get("endedAt") or 0
+    if not isinstance(ended_ms, (int, float)) or ended_ms <= 0:
+        ended_ms = int(datetime.now().timestamp() * 1000)
+    dt = datetime.fromtimestamp(ended_ms / 1000)
+    date_part = dt.strftime("%Y-%m-%d-%H%M")
+    opp = _safe_slug(pm.get("opponent", "unknown"))
+    fmt = _format_shortcode(pm.get("format", ""))
+    battle_id = pm.get("battleId", "")
+    suffix = "".join(c for c in battle_id[-8:] if c.isalnum()) or "x"
+    return f"{date_part}-{opp}-{fmt}-{suffix}.json"
+
+
+@app.post("/postmortem")
+async def postmortem(req: Request) -> JSONResponse:
+    """Accept and persist a battle postmortem JSON. The extension fires this
+    fire-and-forget after writing to localStorage; if we're down, localStorage
+    is the source of truth and the user can recover later.
+
+    Uses ``Request`` + ``await req.json()`` rather than a Pydantic model so the
+    proxy is forward-compatible with future TypeScript schema evolutions —
+    we store JSON verbatim and downstream tools parse with the canonical schema.
+    """
+    try:
+        body = await req.json()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"bad json: {exc}"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "body must be object"}, status_code=400)
+    if not isinstance(body.get("battleId"), str) or not body["battleId"]:
+        return JSONResponse({"ok": False, "error": "missing battleId"}, status_code=400)
+
+    fname = _build_postmortem_filename(body)
+    _POSTMORTEM_DIR.mkdir(parents=True, exist_ok=True)
+    out = _POSTMORTEM_DIR / fname
+    out.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+
+    manifest_entry = {
+        "battleId": body["battleId"],
+        "file": fname,
+        "opponent": body.get("opponent"),
+        "format": body.get("format"),
+        "endedAtMs": body.get("endedAtMs"),
+        "totalTurns": body.get("totalTurns"),
+        "winner": body.get("winner"),
+        "schemaVersion": body.get("schemaVersion"),
+    }
+    with _MANIFEST_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(manifest_entry, ensure_ascii=False) + "\n")
+
+    return JSONResponse({"ok": True, "file": fname})
+
+
 # --- /explain endpoint -----------------------------------------------------
 
 # System prompt is intentionally strict about hallucination guards. The Groq
