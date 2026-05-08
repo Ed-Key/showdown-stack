@@ -674,6 +674,7 @@ export function buildPlanHMeta(b: any, br: any, win: any) {
 
   return {
     battleId: br?.id || '',
+    turn: currentTurn,
     format: b?.tier || 'gen9ou',
     oppRevealedMoves,
     // Phase 2 fields (proxy reads when present; absent = Phase 1 client)

@@ -357,6 +357,14 @@ def apply_belief(req: dict[str, Any]) -> dict[str, Any]:
         return req
 
     battle_id = meta.get("battleId")
+    turn_num = meta.get("turn")
+    # Engine-log correlation keys: forward both as top-level fields on `req`
+    # so the engine can stamp them on the [ENGINE-INSTRUMENT] line. The
+    # engine's serde_json::Value reader tolerates unknown top-level keys.
+    if battle_id:
+        req["battleId"] = battle_id
+    if isinstance(turn_num, int):
+        req["turn"] = turn_num
     raw_fmt = meta.get("format") or DEFAULT_FORMAT
     # Showdown's `b.tier` is the display string ("[Gen 9] National Dex"), but
     # Smogon chaos URLs and our cache filenames use normalized form
