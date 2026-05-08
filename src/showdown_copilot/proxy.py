@@ -705,6 +705,29 @@ async def postmortem(req: Request) -> JSONResponse:
 
     fname = existing_fname or _build_postmortem_filename(body)
     out = _POSTMORTEM_DIR / fname
+
+    # Race-condition guard (2026-05-08): soft-persist fires per turn as
+    # fetch() promises. Network jitter can make an EARLIER persist's POST
+    # land at the proxy AFTER a later persist's POST, overwriting more
+    # complete data with less complete data. Skip overwrite if the
+    # incoming pm has STRICTLY FEWER turn diffs than what's on disk.
+    if existing_fname and out.exists():
+        try:
+            existing_pm = json.loads(out.read_text(encoding="utf-8"))
+            existing_turns = len(existing_pm.get("turns") or [])
+            new_turns = len(body.get("turns") or [])
+            if new_turns < existing_turns:
+                logger.info(
+                    "/postmortem: skipping overwrite for %s — new pm has %d turn diffs, existing has %d",
+                    battle_id, new_turns, existing_turns,
+                )
+                return JSONResponse({
+                    "ok": True, "file": fname, "overwrote": False,
+                    "skipped_stale": True, "existing_turns": existing_turns, "new_turns": new_turns,
+                })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("/postmortem: could not read existing file %s: %s", fname, exc)
+
     out.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
 
     manifest_entry = {
