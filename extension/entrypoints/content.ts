@@ -574,7 +574,13 @@ export default defineContentScript({
 
     const dumpedBattleIds = new Set<string>();
 
-    function persistPostMortem(pm: BattlePostMortem): void {
+    function persistPostMortem(pm: BattlePostMortem, opts?: { final?: boolean }): void {
+      // `final` defaults to true so the existing battle-end caller is unchanged.
+      // Soft-persist callers (per-turn) pass `final: false` to write to
+      // localStorage only and skip the disk POST — the proxy filename uses
+      // `endedAtMs` which is 0/missing mid-battle, so a disk POST per turn
+      // would pollute the archive with intermediate snapshots.
+      const isFinal = opts?.final !== false;
       // Overlay any in-battle annotations from temp localStorage keys
       // onto the parsed post-mortem before persisting.
       const turnNotes = readTurnNotes(pm.battleId);
@@ -602,12 +608,17 @@ export default defineContentScript({
       // canonical client-side store; this is the engine-debug corpus path.
       // Placed BEFORE the localStorage try so the disk write happens even if
       // QuotaExceededError forces us into the prune-and-retry path below.
-      fetch('http://localhost:7271/postmortem', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: json,
-        keepalive: true,
-      }).catch(() => { /* proxy down — localStorage still has it */ });
+      // Gated on `isFinal` to avoid polluting the disk archive with mid-battle
+      // intermediate snapshots (proxy filename falls back to `now()` when
+      // `endedAtMs` is missing, producing a new file each minute).
+      if (isFinal) {
+        fetch('http://localhost:7271/postmortem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: json,
+          keepalive: true,
+        }).catch(() => { /* proxy down — localStorage still has it */ });
+      }
 
       try {
         localStorage.setItem(key, json);
@@ -809,6 +820,30 @@ export default defineContentScript({
           if (lastBeliefSnapshot) writeTurnBeliefSnapshot(battleId, turn, lastBeliefSnapshot);
           const summary = buildMatrixSummary();
           if (summary !== undefined) writeTurnMatrixSummary(battleId, turn, summary);
+        }
+        // Soft-persist the in-progress postmortem so navigating away mid-battle
+        // doesn't lose data. localStorage only — disk POST stays gated on the
+        // battle-end trigger in the poll loop (see persistPostMortem `final`
+        // arg). Mirrors the parse call shape used by the dump path below.
+        if (b && battleId) {
+          try {
+            const battleRecords = scHistory.filter(r => r.battleId === battleId);
+            const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
+            const pm = parseBattlePostMortem(
+              battleRecords as any,
+              (b.stepQueue || []).slice(),
+              {
+                battleId,
+                format: b.tier || 'unknown',
+                myUsername: b.mySide?.name || 'unknown',
+                mySideId,
+                opponent: b.farSide?.name || 'unknown',
+              },
+            );
+            persistPostMortem(pm, { final: false });
+          } catch (err) {
+            console.warn('[sc:postmortem] soft persist failed', err);
+          }
         }
       }
       if (!record) return;
