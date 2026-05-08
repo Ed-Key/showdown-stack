@@ -608,17 +608,21 @@ export default defineContentScript({
       // canonical client-side store; this is the engine-debug corpus path.
       // Placed BEFORE the localStorage try so the disk write happens even if
       // QuotaExceededError forces us into the prune-and-retry path below.
-      // Gated on `isFinal` to avoid polluting the disk archive with mid-battle
-      // intermediate snapshots (proxy filename falls back to `now()` when
-      // `endedAtMs` is missing, producing a new file each minute).
-      if (isFinal) {
-        fetch('http://localhost:7271/postmortem', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: json,
-          keepalive: true,
-        }).catch(() => { /* proxy down — localStorage still has it */ });
-      }
+      //
+      // Fix B (2026-05-08): fires for BOTH soft (per-turn) and hard (battle-
+      // end) persists. The proxy /postmortem endpoint detects same-battleId
+      // and OVERWRITES the existing file (battleId-keyed), so per-turn POSTs
+      // converge to one file per battle. Eliminates the navigate-away data
+      // loss case — the disk archive stays current even if the user closes
+      // the tab before Showdown's battle-end signal fires.
+      fetch('http://localhost:7271/postmortem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: true,
+      }).catch(() => { /* proxy down — localStorage still has it */ });
+      // `isFinal` is now informational only; both branches fire the same POST.
+      void isFinal;
 
       try {
         localStorage.setItem(key, json);

@@ -683,13 +683,32 @@ async def postmortem(req: Request) -> JSONResponse:
     if not isinstance(body.get("battleId"), str) or not body["battleId"]:
         return JSONResponse({"ok": False, "error": "missing battleId"}, status_code=400)
 
-    fname = _build_postmortem_filename(body)
     _POSTMORTEM_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Fix B: if a postmortem for this battleId already exists on disk, REUSE
+    # the existing filename and overwrite it. Lets the extension safely fire
+    # incremental disk POSTs every turn — they all converge to one file per
+    # battle. Without this, mid-battle posts (endedAtMs=0) would each get a
+    # fresh datetime-based filename, polluting the archive with duplicates.
+    battle_id = body["battleId"]
+    existing_fname: str | None = None
+    if _MANIFEST_PATH.exists():
+        with _MANIFEST_PATH.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if entry.get("battleId") == battle_id:
+                    existing_fname = entry.get("file")
+                    # don't break — last entry wins (latest filename)
+
+    fname = existing_fname or _build_postmortem_filename(body)
     out = _POSTMORTEM_DIR / fname
     out.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
 
     manifest_entry = {
-        "battleId": body["battleId"],
+        "battleId": battle_id,
         "file": fname,
         "opponent": body.get("opponent"),
         "format": body.get("format"),
@@ -698,10 +717,14 @@ async def postmortem(req: Request) -> JSONResponse:
         "winner": body.get("winner"),
         "schemaVersion": body.get("schemaVersion"),
     }
+    # Manifest is append-only; readers dedupe by battleId taking the latest.
+    # We append even on overwrite so endedAtMs / totalTurns / winner reflect
+    # the most-recent post, while still preserving incremental history if
+    # someone wants to see it.
     with _MANIFEST_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(manifest_entry, ensure_ascii=False) + "\n")
 
-    return JSONResponse({"ok": True, "file": fname})
+    return JSONResponse({"ok": True, "file": fname, "overwrote": existing_fname is not None})
 
 
 # --- /explain endpoint -----------------------------------------------------
