@@ -1059,13 +1059,12 @@ describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
       expect(t.matrixSummary).toBeNull();
     }
   });
-  it('engineUpdates is an array on each turn diff (empty when record.updates absent)', () => {
+  it('engineUpdates is a summary object on each turn diff (zero when record.updates absent)', () => {
     for (const t of pm.turns) {
-      expect(Array.isArray(t.engineUpdates)).toBe(true);
-      expect(t.engineUpdates.length).toBe(0);
+      expect(t.engineUpdates).toEqual({ flipCount: 0, sequence: [], eventCount: 0 });
     }
   });
-  it('engineUpdates passes through record.updates when provided', () => {
+  it('engineUpdates summarizes record.updates when provided (full events live in engine.log)', () => {
     const stepQueueLocal = [
       '|gametype|singles',
       '|player|p1|Opp|1|',
@@ -1090,9 +1089,9 @@ describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
     ];
     const pm2 = parseBattlePostMortem(recs, stepQueueLocal, META);
     expect(pm2.turns.length).toBe(1);
-    expect(pm2.turns[0].engineUpdates.length).toBe(3);
-    expect(pm2.turns[0].engineUpdates[0]).toEqual(updateA);
-    expect(pm2.turns[0].engineUpdates[2]).toEqual(updateF);
+    expect(pm2.turns[0].engineUpdates.eventCount).toBe(3);
+    expect(pm2.turns[0].engineUpdates.flipCount).toBe(2);
+    expect(pm2.turns[0].engineUpdates.sequence).toEqual(['X', 'Y', 'Secret Sword']);
   });
   it('replayUrl defaults to null on a fresh postmortem (parser default)', () => {
     expect(pm.replayUrl).toBeNull();

@@ -110,7 +110,14 @@ export type RegularTurnDiff = {
   conflictWarning: ConflictWarningSnapshot | null;
   beliefSnapshot: any | null;
   matrixSummary: any | null;
-  engineUpdates: any[];
+  // engineUpdates: convergence summary only, NOT raw streaming events.
+  // Storing all updates blows past Chrome's 5MB localStorage cap (~30MB
+  // for a 30-turn battle, 77k events). The same raw data lives in
+  // /tmp/engine.log keyed by (battle_id, turn) for full-fidelity analysis.
+  // Summary captures the MCTS convergence pattern: how many distinct
+  // bestMove values appeared during the search (flipCount), the unique
+  // sequence of bestMoves (capped to 6), and total event count.
+  engineUpdates: { flipCount: number; sequence: string[]; eventCount: number };
 };
 
 export type ForceSwitchTurnDiff = {
@@ -133,7 +140,14 @@ export type ForceSwitchTurnDiff = {
   conflictWarning: ConflictWarningSnapshot | null;
   beliefSnapshot: any | null;
   matrixSummary: any | null;
-  engineUpdates: any[];
+  // engineUpdates: convergence summary only, NOT raw streaming events.
+  // Storing all updates blows past Chrome's 5MB localStorage cap (~30MB
+  // for a 30-turn battle, 77k events). The same raw data lives in
+  // /tmp/engine.log keyed by (battle_id, turn) for full-fidelity analysis.
+  // Summary captures the MCTS convergence pattern: how many distinct
+  // bestMove values appeared during the search (flipCount), the unique
+  // sequence of bestMoves (capped to 6), and total event count.
+  engineUpdates: { flipCount: number; sequence: string[]; eventCount: number };
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -480,7 +494,7 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     conflictWarning: null,
     beliefSnapshot: null,
     matrixSummary: null,
-    engineUpdates: Array.isArray(r.updates) ? [...r.updates] : [],
+    engineUpdates: summarizeEngineUpdates(r.updates),
   };
 }
 
@@ -596,7 +610,28 @@ function buildForceSwitchTurnDiff(
     conflictWarning: null,
     beliefSnapshot: null,
     matrixSummary: null,
-    engineUpdates: Array.isArray(r.updates) ? [...r.updates] : [],
+    engineUpdates: summarizeEngineUpdates(r.updates),
+  };
+}
+
+// Compress engine streaming events into a tiny convergence summary so the
+// postmortem JSON fits in Chrome's 5MB localStorage cap. Raw events live in
+// /tmp/engine.log; here we just track WHAT the bestMove sequence looked like.
+function summarizeEngineUpdates(updates: any[] | undefined): { flipCount: number; sequence: string[]; eventCount: number } {
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return { flipCount: 0, sequence: [], eventCount: 0 };
+  }
+  const seq: string[] = [];
+  for (const u of updates) {
+    const bm = u?.bestMove;
+    if (typeof bm === 'string' && bm && (seq.length === 0 || seq[seq.length - 1] !== bm)) {
+      seq.push(bm);
+    }
+  }
+  return {
+    flipCount: Math.max(0, seq.length - 1),
+    sequence: seq.slice(0, 6),  // cap so a flailing 30-turn search doesn't bloat
+    eventCount: updates.length,
   };
 }
 
