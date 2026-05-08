@@ -47,14 +47,15 @@ if [[ -s "$LOG" ]]; then
   echo "[run-engine-tuned] snapshotted existing log → ${LOG%.log}-baseline-${STAMP}.log"
 fi
 
-# Kill any existing engine on $PORT
-PIDS="$(lsof -ti :"$PORT" 2>/dev/null || true)"
+# Kill any existing engine LISTENING on $PORT. -sTCP:LISTEN filters to the
+# actual server process, ignoring proxy/extension processes that hold an
+# outbound connection to the engine.
+PIDS="$(lsof -sTCP:LISTEN -ti :"$PORT" 2>/dev/null || true)"
 if [[ -n "$PIDS" ]]; then
   echo "[run-engine-tuned] killing existing engine pids: $PIDS"
   kill -TERM $PIDS 2>/dev/null || true
   sleep 1
-  # Force-kill if still alive
-  PIDS2="$(lsof -ti :"$PORT" 2>/dev/null || true)"
+  PIDS2="$(lsof -sTCP:LISTEN -ti :"$PORT" 2>/dev/null || true)"
   [[ -n "$PIDS2" ]] && kill -9 $PIDS2 2>/dev/null || true
 fi
 
