@@ -2,7 +2,7 @@
 // events and produces a compact per-battle post-mortem.
 // No DOM, no globals, no side effects — safe to import into Vitest.
 
-export const POSTMORTEM_SCHEMA_VERSION = 5 as const;
+export const POSTMORTEM_SCHEMA_VERSION = 6 as const;
 
 export type ConflictWarningSnapshot = {
   level: 'strong' | 'warn' | 'pivot' | 'info';
@@ -26,6 +26,7 @@ export type DecisionRecordInput = {
   tEndMs?: number;
   forceSwitch: boolean;
   state?: unknown;
+  updates?: any[];
   final?: {
     bestMove?: string;
     confidence?: number;
@@ -107,6 +108,9 @@ export type RegularTurnDiff = {
   userNote: string | null;
   userOverrideTag: OverrideTag | null;
   conflictWarning: ConflictWarningSnapshot | null;
+  beliefSnapshot: any | null;
+  matrixSummary: any | null;
+  engineUpdates: any[];
 };
 
 export type ForceSwitchTurnDiff = {
@@ -127,6 +131,9 @@ export type ForceSwitchTurnDiff = {
   userNote: string | null;
   userOverrideTag: OverrideTag | null;
   conflictWarning: ConflictWarningSnapshot | null;
+  beliefSnapshot: any | null;
+  matrixSummary: any | null;
+  engineUpdates: any[];
 };
 
 export type TurnDiff = RegularTurnDiff | ForceSwitchTurnDiff;
@@ -471,6 +478,9 @@ function buildRegularTurnDiff(r: DecisionRecordInput, te: TurnEvents): RegularTu
     userNote: null,
     userOverrideTag: null,
     conflictWarning: null,
+    beliefSnapshot: null,
+    matrixSummary: null,
+    engineUpdates: Array.isArray(r.updates) ? [...r.updates] : [],
   };
 }
 
@@ -584,6 +594,9 @@ function buildForceSwitchTurnDiff(
     userNote: null,
     userOverrideTag: null,
     conflictWarning: null,
+    beliefSnapshot: null,
+    matrixSummary: null,
+    engineUpdates: Array.isArray(r.updates) ? [...r.updates] : [],
   };
 }
 

@@ -1004,7 +1004,7 @@ describe('parseBattlePostMortem — Phase 2 integration', () => {
   });
 });
 
-describe('parseBattlePostMortem — annotation fields (schema v5)', () => {
+describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
   const stepQueue = [
     '|gametype|singles',
     '|player|p1|Opp|1|',
@@ -1028,8 +1028,8 @@ describe('parseBattlePostMortem — annotation fields (schema v5)', () => {
 
   const pm = parseBattlePostMortem(records, stepQueue, META);
 
-  it('schemaVersion is 5', () => {
-    expect(pm.schemaVersion).toBe(5);
+  it('schemaVersion is 6', () => {
+    expect(pm.schemaVersion).toBe(6);
   });
   it('battleNote defaults to null on a fresh postmortem', () => {
     expect(pm.battleNote).toBeNull();
@@ -1048,6 +1048,51 @@ describe('parseBattlePostMortem — annotation fields (schema v5)', () => {
     for (const t of pm.turns) {
       expect(t.conflictWarning).toBeNull();
     }
+  });
+  it('beliefSnapshot defaults to null on each turn diff', () => {
+    for (const t of pm.turns) {
+      expect(t.beliefSnapshot).toBeNull();
+    }
+  });
+  it('matrixSummary defaults to null on each turn diff', () => {
+    for (const t of pm.turns) {
+      expect(t.matrixSummary).toBeNull();
+    }
+  });
+  it('engineUpdates is an array on each turn diff (empty when record.updates absent)', () => {
+    for (const t of pm.turns) {
+      expect(Array.isArray(t.engineUpdates)).toBe(true);
+      expect(t.engineUpdates.length).toBe(0);
+    }
+  });
+  it('engineUpdates passes through record.updates when provided', () => {
+    const stepQueueLocal = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|100/100',
+      '|turn|1',
+      '|move|p2a: MyMon|Secret Sword|p1a: OppMon',
+      '|-damage|p1a: OppMon|50/100',
+      '|win|Me',
+    ];
+    const updateA = { event: 'update', bestMove: 'X', confidence: 0.4 };
+    const updateB = { event: 'update', bestMove: 'Y', confidence: 0.6 };
+    const updateF = { event: 'final', bestMove: 'Secret Sword', confidence: 0.9 };
+    const recs: DecisionRecordInput[] = [
+      rec({
+        turn: 1, rqid: 1,
+        updates: [updateA, updateB, updateF],
+        final: { bestMove: 'Secret Sword', confidence: 0.9, sims: 100, depth: 5, pv: [], alternatives: [] },
+      }),
+    ];
+    const pm2 = parseBattlePostMortem(recs, stepQueueLocal, META);
+    expect(pm2.turns.length).toBe(1);
+    expect(pm2.turns[0].engineUpdates.length).toBe(3);
+    expect(pm2.turns[0].engineUpdates[0]).toEqual(updateA);
+    expect(pm2.turns[0].engineUpdates[2]).toEqual(updateF);
   });
   it('replayUrl defaults to null on a fresh postmortem (parser default)', () => {
     expect(pm.replayUrl).toBeNull();

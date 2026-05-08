@@ -13,7 +13,7 @@ import {
 } from '../lib/translate';
 import { snapshotState, snapshotSide } from '../lib/snapshot';
 import { mountExpandableCard } from '../lib/tabs';
-import { fetchBeliefSnapshot } from '../lib/belief-snapshot';
+import { fetchBeliefSnapshot, type BeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { detectConflict, type ConflictWarning } from '../lib/conflict';
@@ -221,6 +221,7 @@ export default defineContentScript({
     // (only when expanded — avoids the calc cost when collapsed).
     const matrixCard = mountExpandableCard(cardsRoot, 'matrix', '⚔ Damage matrix');
     let lastMatrix: DamageMatrix | null = null;
+    let lastBeliefSnapshot: BeliefSnapshot | null = null;
 
     async function refreshMatrix(b: any, br: any): Promise<void> {
       if (!b || !br?.id) return;
@@ -232,6 +233,7 @@ export default defineContentScript({
         return;
       }
       const snap = await fetchBeliefSnapshot('http://localhost:7271', br.id);
+      if (snap) lastBeliefSnapshot = snap;
       const beliefByOpp: Record<string, any> = {};
       for (const [species, b2] of Object.entries(snap?.opponents || {})) {
         beliefByOpp[species] = b2;
@@ -393,6 +395,26 @@ export default defineContentScript({
     }
     function readTurnConflictWarning(battleId: string, turn: number): any | null {
       const raw = localStorage.getItem(`sc:conflict-warning:${battleId}:${turn}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    function writeTurnBeliefSnapshot(battleId: string, turn: number, snap: any) {
+      if (!snap) return;
+      try { localStorage.setItem(`sc:belief:${battleId}:${turn}`, JSON.stringify(snap)); }
+      catch {}
+    }
+    function readTurnBeliefSnapshot(battleId: string, turn: number): any | null {
+      const raw = localStorage.getItem(`sc:belief:${battleId}:${turn}`);
+      if (!raw) return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    function writeTurnMatrixSummary(battleId: string, turn: number, summary: any) {
+      if (!summary) return;
+      try { localStorage.setItem(`sc:matrix:${battleId}:${turn}`, JSON.stringify(summary)); }
+      catch {}
+    }
+    function readTurnMatrixSummary(battleId: string, turn: number): any | null {
+      const raw = localStorage.getItem(`sc:matrix:${battleId}:${turn}`);
       if (!raw) return null;
       try { return JSON.parse(raw); } catch { return null; }
     }
@@ -563,6 +585,8 @@ export default defineContentScript({
         if (note) t.userNote = note;
         t.userOverrideTag = readTurnOverrideTag(pm.battleId, t.turn) as any;
         t.conflictWarning = readTurnConflictWarning(pm.battleId, t.turn);
+        t.beliefSnapshot = readTurnBeliefSnapshot(pm.battleId, t.turn);
+        t.matrixSummary = readTurnMatrixSummary(pm.battleId, t.turn);
       }
       // Derive replay URL from the battle ID. Showdown IDs look like
       // `battle-gen9nationaldex-2604189999-7lj3ryrg…`; the replay path
@@ -772,6 +796,19 @@ export default defineContentScript({
           }
         } else {
           renderConflict(null);
+        }
+      }
+      // Tier 2 debug-corpus: freeze belief snapshot + matrix summary onto
+      // localStorage at engine-final time so persistPostMortem can overlay
+      // per-turn snapshots at battle-end (parser can't see them retroactively).
+      if (u.event === 'final') {
+        const b = win.app?.curRoom?.battle;
+        const battleId = win.app?.curRoom?.id;
+        if (battleId) {
+          const turn = b?.turn ?? 0;
+          if (lastBeliefSnapshot) writeTurnBeliefSnapshot(battleId, turn, lastBeliefSnapshot);
+          const summary = buildMatrixSummary();
+          if (summary !== undefined) writeTurnMatrixSummary(battleId, turn, summary);
         }
       }
       if (!record) return;
@@ -1102,6 +1139,7 @@ export default defineContentScript({
           const oppSnaps = oppTeam.map((p: any) => buildOppPokemon(p, win));
 
           fetchBeliefSnapshot('http://localhost:7271', br?.id || '').then((snap: any) => {
+            if (snap) lastBeliefSnapshot = snap;
             const beliefByOpp: Record<string, any> = {};
             for (const [sp, b2] of Object.entries(snap?.opponents || {})) {
               beliefByOpp[sp] = b2;
