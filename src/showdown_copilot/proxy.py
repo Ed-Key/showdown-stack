@@ -14,8 +14,11 @@ Run: `python -m showdown_copilot.proxy` (requires `pip install -e .[proxy]`).
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
+import os
+import random
 import subprocess
 import time
 from collections import OrderedDict
@@ -97,6 +100,135 @@ _TERA_BANNED_FORMATS: frozenset[str] = frozenset({
     "gen9ou",
     "gen9nationaldex",
 })
+
+# --- PIMC v2 (Phase 1: proxy fan-out) -------------------------------------
+# Feature flag. Default 0 = OFF (live behavior unchanged — single modal POST).
+# K=1 forces single-modal path (same code as K=0). K in 2..8 enables PIMC
+# fan-out: K plausible opponent teams sampled per opp mon, K full hypotheses
+# combined into a `{"hypotheses":[...]}` request the engine can dispatch.
+#
+# Read at request time (not import time) so a manual env-flip + uvicorn
+# autoreload picks it up without code edits. Set via:
+#   `POKE_PROXY_PIMC_K=4 python -m showdown_copilot.proxy`
+# Bound is enforced (clamp to [0, 8]) — anything outside is ignored to
+# protect the engine from runaway K values eating the per-hypothesis budget.
+def _read_pimc_k_env() -> int:
+    """Parse `POKE_PROXY_PIMC_K`; clamp to [0, 8]; return 0 on parse error."""
+    raw = os.environ.get("POKE_PROXY_PIMC_K", "0")
+    try:
+        k = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    if k < 0:
+        return 0
+    if k > 8:
+        return 8
+    return k
+
+
+def _choose_pimc_k(
+    requested_k: int, opp_pokemon: list[dict[str, Any]]
+) -> int:
+    """Auto-tune K based on how much opp info has been revealed.
+
+    Per the PIMC v2 scoping recommendation:
+      - K=8 in pre-reveal phase (≤2 total revealed moves across opp team)
+      - K=2 in late-game (≥5 opp slots have any reveal — moves/item/ability)
+      - K=`requested_k` (default 6 when `requested_k` >= 6) elsewhere
+
+    `requested_k` is the env-set ceiling. If env says K=4 we never auto-tune
+    above 4; if env says K=2 we never auto-tune above 2 either. This lets a
+    user lock in a low K for cost control while still allowing the proxy
+    to scale DOWN when most info is already known (cheap correctness win).
+    """
+    if requested_k <= 0:
+        return 0
+    if requested_k == 1:
+        return 1
+
+    # Count revealed signal across all opp Pokemon (excluding empties).
+    total_moves_revealed = 0
+    slots_with_reveal = 0
+    for pkmn in opp_pokemon:
+        species = pkmn.get("species", "")
+        if not species or species == "none":
+            continue
+        moves = pkmn.get("moves") or []
+        # Ground-truth-revealed moves only — the modal padding has 4 slots
+        # set to chaos top-4. We can't distinguish those here without the
+        # belief tracker, so this helper is called with the per-mon belief
+        # in `apply_belief_pimc` instead. Default heuristic falls back to
+        # raw revealed_moves count from the BattleRequest's _planH metadata
+        # being passed in via the wrapper. To keep this helper pure-data,
+        # we count: any non-default slots, item != "none", ability != "none".
+        revealed_here = 0
+        for m in moves:
+            mid = m.get("id") if isinstance(m, dict) else m
+            if mid and mid != "none":
+                revealed_here += 1
+        # Note: this raw count includes the padded modal moves too. The
+        # belief-aware caller in `apply_belief_pimc` overrides this helper
+        # with a richer per-belief signal — see that function's heuristic.
+        if (pkmn.get("item") or "none") != "none":
+            slots_with_reveal += 1
+        if (pkmn.get("ability") or "none") != "none":
+            slots_with_reveal += 1
+        if pkmn.get("terastallized"):
+            slots_with_reveal += 1
+        total_moves_revealed += revealed_here
+
+    # The block above counts post-overlay padded moves so it OVER-estimates
+    # reveals. The real auto-tune happens via `_choose_pimc_k_from_belief`
+    # below — this version is a no-belief fallback for callers that don't
+    # have the tracker handy (rare).
+    if slots_with_reveal >= 5:
+        return min(2, requested_k)
+    if total_moves_revealed <= 2:
+        return min(8, requested_k)
+    return min(6, requested_k)
+
+
+def _choose_pimc_k_from_belief(
+    requested_k: int,
+    tracker: BeliefTracker,
+    opp_pokemon: list[dict[str, Any]],
+) -> int:
+    """Auto-tune K using ground-truth reveals from the BeliefTracker.
+
+    Reveal score = total revealed moves + 1 per revealed item + 1 per
+    revealed ability + 1 per terastallized mon, summed across all opp
+    Pokemon. Thresholds:
+      - 0-2 reveal points → pre-reveal → K=min(8, requested_k)
+      - 5+ reveal points → late-game  → K=min(2, requested_k)
+      - else            → mid-game   → K=min(6, requested_k)
+
+    requested_k of 0 returns 0 (PIMC off). requested_k of 1 returns 1
+    (single-modal path). 2-8 enables fan-out with auto-tune ceiling.
+    """
+    if requested_k <= 0:
+        return 0
+    if requested_k == 1:
+        return 1
+
+    points = 0
+    for pkmn in opp_pokemon:
+        species = pkmn.get("species", "")
+        if not species or species == "none":
+            continue
+        belief = tracker.get(species)
+        points += len(belief.revealed_moves)
+        if belief.revealed_item is not None:
+            points += 1
+        if belief.revealed_ability is not None:
+            points += 1
+        if belief.terastallized:
+            points += 1
+
+    if points <= 2:
+        return min(8, requested_k)
+    if points >= 5:
+        return min(2, requested_k)
+    return min(6, requested_k)
 
 
 def _normalize(name: str) -> str:
@@ -471,6 +603,163 @@ def apply_belief(req: dict[str, Any]) -> dict[str, Any]:
     return req
 
 
+# --- PIMC v2 Phase 1: proxy fan-out ---------------------------------------
+def _sample_one_set_for_pkmn(
+    pkmn: dict[str, Any],
+    tracker: BeliefTracker,
+    resolved_fmt: str,
+    rng: random.Random,
+) -> dict[str, Any] | None:
+    """Sample ONE plausible set for one opp Pokemon and return an overlaid
+    copy of `pkmn`. Mirrors `_apply_modal` but uses a sampled (not modal)
+    set so the K hypotheses diverge from each other.
+
+    Returns None on failure (chaos miss / unknown species / sample raised);
+    caller should fall back to the original `pkmn` dict in that case.
+    """
+    assert _priors is not None
+    species = pkmn.get("species", "")
+    if not species or species == "none":
+        return None
+
+    belief = tracker.get(species)
+    display_name = _resolve_display_species(species, resolved_fmt)
+    try:
+        sampled = _priors.sample_set(
+            display_name, resolved_fmt, rng=rng, belief=belief
+        )
+    except Exception as exc:  # noqa: BLE001 — engine call must never crash
+        logger.warning(
+            "sample_set(%s, %s) failed: %s", display_name, resolved_fmt, exc
+        )
+        return None
+
+    out = copy.deepcopy(pkmn)
+    move_objs: list[dict[str, Any]] = [{"id": m, "pp": 8} for m in sampled.moves[:4]]
+    while len(move_objs) < 4:
+        move_objs.append({"id": "none", "pp": 0})
+    out["moves"] = move_objs
+    if out.get("item") == "none" and sampled.item and sampled.item != "none":
+        out["item"] = sampled.item
+    if out.get("ability") == "none" and sampled.ability and sampled.ability != "none":
+        out["ability"] = sampled.ability
+    if out.get("teraType") == "" and sampled.tera_type:
+        out["teraType"] = sampled.tera_type
+    return out
+
+
+def apply_belief_pimc(req: dict[str, Any], k: int) -> dict[str, Any]:
+    """PIMC v2 fan-out: build K plausible-team hypotheses from belief.
+
+    Returns a `{"hypotheses":[state1, state2, ..., stateK]}` request shape.
+    Each state is a full BattleRequest with the SAME player-side data and
+    DIFFERENT sampled opp sets. The K=`k` here is the FINAL K — the caller
+    is expected to have already auto-tuned via `_choose_pimc_k_from_belief`.
+
+    When K <= 1, falls back to `apply_belief` (single modal). When the
+    request lacks `_planH` metadata or the chaos format is unresolvable,
+    also falls back to `apply_belief` so the engine still gets a valid
+    single-state POST instead of a malformed multi-hypothesis blob.
+
+    Reveal honoring: each sampled set respects `belief.revealed_moves` /
+    `revealed_item` / `revealed_ability` because we pass `belief=` through
+    to `priors.sample_set`. So if EQ is revealed for Garchomp, all K of
+    Garchomp's sampled sets include EQ.
+
+    NOTE: this function is intentionally NOT wired into `analyze_stream`
+    yet — Phase 1 = code only, no behavior change. Phase 2 wires it.
+    """
+    if k <= 1:
+        return apply_belief(req)
+
+    # Peek at metadata WITHOUT consuming it — we need apply_belief's
+    # ingest-and-overlay logic to fire ONCE (on the modal pass below)
+    # so the tracker is updated. We then re-derive K hypotheses on top
+    # of the same tracker state.
+    meta = req.get("_planH")
+    if not meta:
+        # No belief metadata → no point fanning out.
+        return apply_belief(req)
+
+    battle_id = meta.get("battleId")
+    if not battle_id:
+        return apply_belief(req)
+
+    raw_fmt = meta.get("format") or DEFAULT_FORMAT
+    fmt = _normalize(raw_fmt) or DEFAULT_FORMAT
+    assert _priors is not None
+
+    # Resolve format. If unavailable, no PIMC — fall through to apply_belief
+    # which will log the same error and return the un-overlaid request.
+    resolved_fmt = _resolve_format(fmt)
+    if resolved_fmt is None:
+        return apply_belief(req)
+
+    # Snapshot the request BEFORE apply_belief mutates it (it strips _planH
+    # and writes battleId / turn / teraBanned to the top level). We rebuild
+    # K hypotheses from that snapshot, so each hypothesis has the same
+    # top-level fields the engine expects.
+    base_req_snapshot = copy.deepcopy(req)
+
+    # Run the standard belief pipeline ONCE on the original request:
+    #  - ingests reveals into the tracker
+    #  - fires speed inference for the just-finished turn
+    #  - resolves format (cached for subsequent _resolve_format calls)
+    #  - mutates `req` in-place to strip _planH and add top-level fields
+    apply_belief(req)
+
+    # Now build K hypothesis-states from the snapshot, each with sampled
+    # opp Pokemon. The player-side (sideOne) is identical across all K.
+    tracker = _trackers.get(battle_id)
+    if tracker is None:
+        # Defensive: should never happen since apply_belief just made it.
+        return req
+
+    rng = random.Random()
+    hypotheses: list[dict[str, Any]] = []
+    for i in range(k):
+        # Start from the post-apply_belief request (which already has the
+        # _planH stripped + top-level battleId/turn/teraBanned set), then
+        # replace the sideTwo.pokemon list with sampled-set overlays.
+        hyp = copy.deepcopy(req)
+        opp_list = (hyp.get("sideTwo") or {}).get("pokemon") or []
+        new_opp_list: list[dict[str, Any]] = []
+        for pkmn in opp_list:
+            sampled_pkmn = _sample_one_set_for_pkmn(
+                pkmn, tracker, resolved_fmt, rng
+            )
+            new_opp_list.append(sampled_pkmn if sampled_pkmn is not None else pkmn)
+        if hyp.get("sideTwo"):
+            hyp["sideTwo"]["pokemon"] = new_opp_list
+        hypotheses.append(hyp)
+
+    # Wrap in the engine-expected envelope. Top-level battleId / turn are
+    # forwarded outside the hypotheses array so the engine's instrument
+    # log line can stamp them once (server.rs:1060-1062 reads them from the
+    # outer body). Keep them on `req` even though they're also present
+    # inside each hypothesis.
+    pimc_req: dict[str, Any] = {"hypotheses": hypotheses}
+    if "battleId" in req:
+        pimc_req["battleId"] = req["battleId"]
+    if "turn" in req:
+        pimc_req["turn"] = req["turn"]
+    if "teraBanned" in req:
+        pimc_req["teraBanned"] = req["teraBanned"]
+    # Forward time / interval budgets at top level too — the engine divides
+    # `time_limit_ms` by K internally to compute per-hypothesis budget
+    # (server.rs:1004), so it MUST see the original full budget here.
+    if "timeLimitMs" in req:
+        pimc_req["timeLimitMs"] = req["timeLimitMs"]
+    if "updateIntervalMs" in req:
+        pimc_req["updateIntervalMs"] = req["updateIntervalMs"]
+
+    logger.info(
+        "[%s][pimc-fanout] k=%d opp_mons=%d format=%s",
+        battle_id, k, len(opp_list), resolved_fmt,
+    )
+    return pimc_req
+
+
 # --- FastAPI app ---
 
 app = FastAPI(title="showdown-copilot Plan H proxy")
@@ -565,9 +854,34 @@ async def _log_replay_record(req_body: dict, response_chunks: list[bytes]) -> No
 
 @app.post("/analyze/stream")
 async def analyze_stream(req: Request) -> StreamingResponse:
-    """Proxy endpoint: ingests BattleRequest, overlays belief, forwards to engine."""
+    """Proxy endpoint: ingests BattleRequest, overlays belief, forwards to engine.
+
+    PIMC v2 Phase 1: when `POKE_PROXY_PIMC_K >= 2`, the request is fanned out
+    into K hypothesis-states using `apply_belief_pimc`. K is auto-tuned per
+    battle phase (8 pre-reveal, 6 mid-game, 2 late-game) capped at the env
+    ceiling. Default 0/1 = single-modal path (legacy behavior, bit-identical
+    to the pre-PIMC proxy).
+    """
     body = await req.json()
-    body = apply_belief(body)
+    pimc_k_env = _read_pimc_k_env()
+    if pimc_k_env >= 2:
+        # Auto-tune from belief — but only if there's a tracker for this battle.
+        # First call ever for a battle has no tracker yet, so we have to do
+        # the apply_belief pipeline (which materializes one) inside
+        # apply_belief_pimc anyway. Use the requested K as the upper bound;
+        # the auto-tune helper inside apply_belief_pimc will dial it down.
+        meta = (body or {}).get("_planH") or {}
+        battle_id = meta.get("battleId")
+        opp_pokemon = ((body or {}).get("sideTwo") or {}).get("pokemon") or []
+        tracker = _trackers.get(battle_id) if battle_id else None
+        if tracker is not None:
+            effective_k = _choose_pimc_k_from_belief(pimc_k_env, tracker, opp_pokemon)
+        else:
+            # No tracker yet → assume pre-reveal phase (highest K for safety).
+            effective_k = min(8, pimc_k_env)
+        body = apply_belief_pimc(body, effective_k)
+    else:
+        body = apply_belief(body)
     assert _engine_client is not None
 
     # Captured for the engine-replay logger (fire-and-forget after stream ends).

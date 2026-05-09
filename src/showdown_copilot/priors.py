@@ -683,8 +683,18 @@ class PriorsSource:
         format: str,
         team_type: str | None = None,
         rng: random.Random | None = None,
+        belief: "OpponentBelief | None" = None,
     ) -> list[ModalSet]:
-        """Return K independent sample_set draws for one species."""
+        """Return K independent sample_set draws for one species.
+
+        When `belief` is provided, the per-draw filter is applied so every
+        sample HONORS revealed moves / item / ability / impossibility sets.
+        This is the core PIMC v2 entry point — the proxy fan-out calls this
+        once per opp Pokemon to materialize K plausible opponent teams.
+        """
         if rng is None:
             rng = random.Random()
-        return [self.sample_set(species, format, team_type, rng) for _ in range(k)]
+        return [
+            self.sample_set(species, format, team_type, rng, belief=belief)
+            for _ in range(k)
+        ]
