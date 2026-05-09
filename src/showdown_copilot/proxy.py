@@ -13,8 +13,11 @@ Run: `python -m showdown_copilot.proxy` (requires `pip install -e .[proxy]`).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import subprocess
+import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -485,12 +488,90 @@ app.add_middleware(
 )
 
 
+# --- engine-replay logging ---
+# JSONL per battle, append-only. One line per /analyze/stream request.
+# Captures the post-belief-overlay request body + raw engine response so a
+# replay tool can re-POST identical inputs to a different engine version.
+# Fire-and-forget after the stream completes — never blocks the live response.
+_REPLAY_DIR = Path(
+    "/Users/edkiboma/Projects/pokemon-ai/workspace/analysis/engine-replay"
+)
+_PROXY_GIT_SHA: str | None = None
+
+
+def _get_proxy_git_sha() -> str:
+    """Cached git sha of the showdown-stack repo. 'unknown' if git unavailable."""
+    global _PROXY_GIT_SHA
+    if _PROXY_GIT_SHA is None:
+        try:
+            _PROXY_GIT_SHA = subprocess.check_output(
+                ["git", "-C", "/Users/edkiboma/Projects/pokemon-ai/showdown-stack",
+                 "rev-parse", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            ).strip()[:12]
+        except Exception:  # noqa: BLE001
+            _PROXY_GIT_SHA = "unknown"
+    return _PROXY_GIT_SHA
+
+
+async def _log_replay_record(req_body: dict, response_chunks: list[bytes]) -> None:
+    """Write one JSONL line capturing the engine input/output for later replay.
+    Best-effort; never raises into the caller."""
+    try:
+        battle_id = req_body.get("battleId") or "unknown"
+        # rqid + turn live in the body; force_switch may be top-level or in _planH.
+        ph = req_body.get("_planH") or {}
+        turn = req_body.get("turn") or ph.get("turn") or 0
+        rqid = req_body.get("rqid") or ph.get("rqid") or 0
+        force_switch = bool(req_body.get("forceSwitch") or ph.get("forceSwitch"))
+
+        response_text = b"".join(response_chunks).decode("utf-8", errors="replace")
+        # Last non-empty line of NDJSON is the terminal "final" event from engine.
+        terminal_event: dict | None = None
+        for line in reversed(response_text.strip().splitlines()):
+            line = line.strip()
+            if line:
+                try:
+                    terminal_event = json.loads(line)
+                except json.JSONDecodeError:
+                    pass
+                break
+
+        record = {
+            "schema": 1,
+            "captured_at_ms": int(time.time() * 1000),
+            "battle_id": battle_id,
+            "turn": turn,
+            "rqid": rqid,
+            "force_switch": force_switch,
+            "engine_url": ENGINE_URL,
+            "proxy_git_sha": _get_proxy_git_sha(),
+            "engine_request": req_body,
+            "engine_response_terminal": terminal_event,
+            "engine_response_raw": response_text,
+        }
+
+        _REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+        out_file = _REPLAY_DIR / f"{battle_id}.jsonl"
+        # Append synchronously — JSONL appends are atomic at line granularity.
+        with open(out_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("engine-replay log failed for battle=%s: %s",
+                       req_body.get("battleId", "?"), exc)
+
+
 @app.post("/analyze/stream")
 async def analyze_stream(req: Request) -> StreamingResponse:
     """Proxy endpoint: ingests BattleRequest, overlays belief, forwards to engine."""
     body = await req.json()
     body = apply_belief(body)
     assert _engine_client is not None
+
+    # Captured for the engine-replay logger (fire-and-forget after stream ends).
+    response_chunks: list[bytes] = []
 
     async def relay():
         try:
@@ -501,10 +582,16 @@ async def analyze_stream(req: Request) -> StreamingResponse:
             ) as r:
                 async for chunk in r.aiter_raw():
                     yield chunk
+                    response_chunks.append(chunk)
         except httpx.HTTPError as exc:
             logger.error("engine forward failed: %s", exc)
             err = {"event": "error", "message": f"proxy: engine unreachable ({exc})"}
-            yield (json.dumps(err) + "\n").encode()
+            err_bytes = (json.dumps(err) + "\n").encode()
+            yield err_bytes
+            response_chunks.append(err_bytes)
+        finally:
+            # Stream complete (or errored). Schedule the replay log; don't await.
+            asyncio.create_task(_log_replay_record(body, response_chunks))
 
     return StreamingResponse(relay(), media_type="application/x-ndjson")
 
