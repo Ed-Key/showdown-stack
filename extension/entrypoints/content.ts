@@ -22,6 +22,10 @@ import { renderThreats } from '../panels/threats';
 import { fetchExplanation } from '../lib/explainer';
 import { renderExplainer } from '../panels/explainer';
 import { renderPimcVoteBar } from '../panels/pimc-vote-bar';
+import {
+  appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
+  type Trend,
+} from '../lib/val-trend';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -107,6 +111,27 @@ export default defineContentScript({
         color: #aaa;
       }
       #sc-panel .sc-best { font-size: 17px; font-weight: bold; color: #7fe; margin: 4px 0; }
+      /* Trend arrow rendered inline next to the confidence percent. Color
+         encodes direction: green = rising, amber = falling, red = collapsing.
+         No glyph is rendered when trend is flat / unknown (degrades cleanly
+         on turn 1 when there's no history). */
+      #sc-panel .sc-trend-arrow {
+        display: inline-block; margin-left: 6px;
+        font-size: 14px; font-weight: bold; vertical-align: middle;
+        cursor: help;
+      }
+      #sc-panel .sc-trend-arrow.sc-trend-rising { color: #7fdc7f; }
+      #sc-panel .sc-trend-arrow.sc-trend-falling { color: #ffb060; }
+      #sc-panel .sc-trend-arrow.sc-trend-collapsing { color: #ff6a6a; }
+      /* DESPERATE tag — fires when val < 0.30 and (when in PIMC mode) the
+         hypotheses agree. Visually loud so user can't miss it. */
+      #sc-panel .sc-desperate {
+        display: inline-block; margin-left: 8px;
+        padding: 1px 6px; border-radius: 3px;
+        background: #5a1f1f; color: #fff;
+        font-size: 11px; font-weight: bold; letter-spacing: 0.5px;
+        vertical-align: middle; cursor: help;
+      }
       #sc-panel .sc-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
       #sc-panel .sc-pv { font-size: 11px; color: #ddd; margin-bottom: 4px; word-break: break-word; }
       #sc-panel .sc-alts { font-size: 11px; color: #ccc; word-break: break-word; }
@@ -375,6 +400,18 @@ export default defineContentScript({
         renderPimcVoteBar(pimcCard.body, lastPimcBreakdown, lastPimcBest);
       }
     });
+
+    // ---- Engine-confidence trend tracker --------------------------------
+    // Per-battle val history (most-recent last, capped at VAL_HISTORY_CAP).
+    // Keyed by Showdown battleId so closing+reopening a battle doesn't reuse
+    // a prior position's history. Cleared lazily — old entries cost ~80 bytes
+    // each so we don't bother to GC.
+    //
+    // The displayed `confidence` from the engine `final` event is our val.
+    // Append once per new (battleId, turn) pair so multi-update streams
+    // don't double-count the same turn's value.
+    const valHistoryByBattle = new Map<string, number[]>();
+    const lastTrackedTurnByBattle = new Map<string, number>();
 
     // ---- Explainer (Why-this-turn-matters) card -------------------------
     // LLM-rendered explanation of the engine's recommendation in plain
@@ -872,8 +909,66 @@ export default defineContentScript({
 
     function renderUpdate(u: any) {
       const arrow = u.event === 'final' ? '▲' : '•';
-      const conf = ((u.confidence || 0) * 100).toFixed(0);
-      bestEl.textContent = `${labelMove(u.bestMove)}  ${arrow} ${conf}%`;
+      const confRaw = u.confidence || 0;
+      const conf = (confRaw * 100).toFixed(0);
+
+      // Track per-battle val history on `final` events. Streamed
+      // intermediate updates (event !== 'final') don't move into the
+      // history — the engine's intermediate values can swing wildly while
+      // the search is mid-flight, and we only want stable per-turn samples.
+      let trend: Trend = null;
+      let desperate = false;
+      const battleId: string | undefined = win.app?.curRoom?.id;
+      const turn: number | undefined = win.app?.curRoom?.battle?.turn;
+
+      if (u.event === 'final' && battleId) {
+        // Append exactly once per (battleId, turn). Showdown sometimes
+        // re-fires final on retry / annotation flow — guard with the
+        // tracked-turn map so a single decision doesn't pollute history.
+        const lastTrackedTurn = lastTrackedTurnByBattle.get(battleId);
+        if (typeof turn === 'number' && lastTrackedTurn !== turn) {
+          const prev = valHistoryByBattle.get(battleId) ?? [];
+          const next = appendVal(prev, confRaw);
+          valHistoryByBattle.set(battleId, next);
+          lastTrackedTurnByBattle.set(battleId, turn);
+        }
+        const hist = valHistoryByBattle.get(battleId) ?? [];
+        trend = computeTrend(hist);
+        // PIMC split suppresses the DESPERATE flag — the scalar val under a
+        // hedged hypothesis distribution is misleading; the split tag
+        // already communicates uncertainty. We compute the split locally
+        // here (instead of reading lastPimcSplit) because updatePimcDisplay
+        // runs AFTER this block on every render, so lastPimcSplit would
+        // reflect the previous turn's state.
+        const breakdown = Array.isArray(u?.pimcBreakdown) ? u.pimcBreakdown : null;
+        let currentPimcSplit = false;
+        if (breakdown && breakdown.length > 0) {
+          const consensus = (typeof u?.bestMove === 'string' && u.bestMove)
+            ? u.bestMove
+            : (breakdown[0]?.top_move ?? '');
+          const agree = breakdown.filter((h: any) => h?.top_move === consensus).length;
+          currentPimcSplit = agree < breakdown.length;
+        }
+        desperate = isDesperate(confRaw, currentPimcSplit);
+      }
+
+      const trendGlyph = formatTrendArrow(trend);
+      const trendTitle = formatTrendTitle(trend);
+      const trendCls =
+        trend === 'rising' ? 'sc-trend-rising' :
+        trend === 'falling' ? 'sc-trend-falling' :
+        trend === 'collapsing' ? 'sc-trend-collapsing' : '';
+      const trendHtml = trendGlyph
+        ? ` <span class="sc-trend-arrow ${trendCls}" title="${escapeAttr(trendTitle)}">${trendGlyph}</span>`
+        : '';
+
+      const desperateHtml = desperate
+        ? ` <span class="sc-desperate" title="engine is recommending the least-bad move from a losing position. Consider sacrificing this mon or switching out.">DESPERATE</span>`
+        : '';
+
+      bestEl.innerHTML =
+        `${escapeHtmlText(labelMove(u.bestMove))}  ${arrow} ${conf}%${trendHtml}${desperateHtml}`;
+
       statsEl.textContent =
         `sims ${(u.sims || 0).toLocaleString()}  depth ${u.depth || 0}` +
         (u.error ? `  ERROR: ${u.error}` : '');
@@ -889,6 +984,14 @@ export default defineContentScript({
       if (u.event === 'final') {
         updatePimcDisplay(u);
       }
+    }
+
+    function escapeHtmlText(s: string): string {
+      return String(s ?? '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function escapeAttr(s: string): string {
+      return escapeHtmlText(s).replace(/"/g, '&quot;');
     }
 
     function updatePimcDisplay(u: any) {
