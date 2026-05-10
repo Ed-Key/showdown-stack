@@ -377,11 +377,16 @@ class PriorsSource:
           - if belief.revealed_item is set, the item must equal it
           - ability must NOT be in belief.impossible_abilities
           - if belief.revealed_ability is set, the ability must equal it
+          - the (item, ability, moves, spread) combination must pass
+            `legality.set_makes_sense` (Pokemon-mechanics + belief
+            reconciliation port from foul-play)
 
         Returns None if no candidates survive the filter (caller should
         fall back to unfiltered modal). Returns a ModalSet built from the
         modal pick over the FILTERED candidate distributions otherwise.
         """
+        from showdown_copilot.legality import set_makes_sense
+
         items_dist = self._filter_items(entry.get("Items", {}), belief)
         if not items_dist:
             return None  # no consistent item
@@ -421,13 +426,54 @@ class PriorsSource:
         # Tera: same — Phase 1 doesn't filter tera by belief
         tera = _top_key(entry.get("Tera Types", {})) or ""
 
+        # Legality filter (port of foul-play smogon_set_makes_sense /
+        # set_makes_sense). Walk item × ability candidates in popularity
+        # order; first combination that passes wins. If NONE pass, fall
+        # through to the next-best fallback (preserves the current default
+        # behavior — never crash on an unsensible-but-popular combo).
+        items_sorted = sorted(items_dist.items(), key=lambda kv: -kv[1])
+        abilities_sorted = sorted(abilities_dist.items(), key=lambda kv: -kv[1])
+        base_speed = _get_base_speeds().get(_normalize(species))
+
+        chosen_item = None
+        chosen_ability = None
+        for item_key, _iw in items_sorted:
+            for ability_key, _aw in abilities_sorted:
+                if set_makes_sense(
+                    item=_normalize(item_key),
+                    ability=_normalize(ability_key),
+                    moves=chosen_moves,
+                    nature=nature,
+                    evs=evs,
+                    belief=belief,
+                    species=_normalize(species),
+                    base_speed=base_speed,
+                ):
+                    chosen_item = item_key
+                    chosen_ability = ability_key
+                    break
+            if chosen_item is not None:
+                break
+
+        if chosen_item is None:
+            # No (item, ability) combination passes the legality filter
+            # against the modal moves+spread. Fall back to the unfiltered
+            # top-of-distribution pick — current behavior, safer than
+            # crashing or returning None.
+            logger.debug(
+                "legality: no consistent combination for %s; falling back "
+                "to top-of-distribution modal", species,
+            )
+            chosen_item = _top_key(items_dist) or "none"
+            chosen_ability = _top_key(abilities_dist) or "none"
+
         return ModalSet(
             species=_normalize(species),
             level=100,
             types=[],
             moves=chosen_moves,
-            item=_normalize(_top_key(items_dist) or "none"),
-            ability=_normalize(_top_key(abilities_dist) or "none"),
+            item=_normalize(chosen_item),
+            ability=_normalize(chosen_ability),
             nature=nature,
             evs=evs,
             ivs={k: 31 for k in ("hp", "atk", "def", "spa", "spd", "spe")},
