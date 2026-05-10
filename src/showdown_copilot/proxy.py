@@ -1642,6 +1642,10 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
+    # Enable DEBUG specifically for the legality module so its `_reject` lines
+    # land in /tmp/proxy.log without flooding everything else with DEBUG noise.
+    # Cheap audit channel: counts + per-rule reasons for filtered-out modal sets.
+    logging.getLogger("showdown_copilot.legality").setLevel(logging.DEBUG)
 
     _priors = PriorsSource()
     _engine_client = httpx.AsyncClient(timeout=120.0)
