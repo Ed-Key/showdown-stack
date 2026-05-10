@@ -181,7 +181,14 @@ def _choose_pimc_k(
     # reveals. The real auto-tune happens via `_choose_pimc_k_from_belief`
     # below — this version is a no-belief fallback for callers that don't
     # have the tracker handy (rare).
-    if slots_with_reveal >= 5:
+    # Option A (2026-05-10): auto-tune was downgrading too aggressively
+    # (K dropped to 2 by turn 1 even when env-set ceiling was 4 or higher).
+    # Disable auto-tune entirely — env value is the effective K, no scaling.
+    # The two threshold branches below are kept for reference / future
+    # re-enable but never reached.
+    return requested_k
+
+    if slots_with_reveal >= 5:  # noqa: unreachable
         return min(2, requested_k)
     if total_moves_revealed <= 2:
         return min(8, requested_k)
@@ -224,7 +231,11 @@ def _choose_pimc_k_from_belief(
         if belief.terastallized:
             points += 1
 
-    if points <= 2:
+    # Option A (2026-05-10): auto-tune disabled — env-set ceiling IS the K.
+    # See _choose_pimc_k for rationale.
+    return requested_k
+
+    if points <= 2:  # noqa: unreachable
         return min(8, requested_k)
     if points >= 5:
         return min(2, requested_k)

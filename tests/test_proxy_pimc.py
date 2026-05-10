@@ -261,41 +261,45 @@ def test_autotune_returns_one_when_requested_one():
 
 
 def test_autotune_pre_reveal_returns_eight_when_ceiling_high():
-    """No reveals → pre-reveal phase → K=8 (capped at requested ceiling)."""
+    """Auto-tune disabled (Option A 2026-05-10): always returns requested_k.
+    Was: pre-reveal returns K=8."""
     tracker = BeliefTracker()
     opp = [_opp_mon("dragapult")]
-    # Tracker is empty for this species → 0 reveal points → pre-reveal.
     assert proxy._choose_pimc_k_from_belief(8, tracker, opp) == 8
 
 
 def test_autotune_pre_reveal_caps_at_requested_ceiling():
-    """Env-set K=4 caps the pre-reveal auto-tune to 4 (not 8)."""
+    """Auto-tune disabled: K=4 ceiling stays K=4 (also matched old behavior)."""
     tracker = BeliefTracker()
     opp = [_opp_mon("dragapult")]
     assert proxy._choose_pimc_k_from_belief(4, tracker, opp) == 4
 
 
-def test_autotune_mid_game_returns_six():
-    """3-4 reveal points (e.g., 3 moves on one mon) → mid-game → K=6."""
+def test_autotune_mid_game_returns_requested_k():
+    """Auto-tune disabled: returns requested_k unmodified.
+    Was: mid-game returned K=6 regardless of higher requested_k."""
     tracker = BeliefTracker()
     tracker.on_reveal_move("dragapult", "dracometeor")
     tracker.on_reveal_move("dragapult", "shadowball")
-    tracker.on_reveal_move("dragapult", "uturn")  # 3 moves → mid-game
+    tracker.on_reveal_move("dragapult", "uturn")
     opp = [_opp_mon("dragapult")]
-    assert proxy._choose_pimc_k_from_belief(8, tracker, opp) == 6
+    # Was 6 with auto-tune, now 8 (the requested ceiling).
+    assert proxy._choose_pimc_k_from_belief(8, tracker, opp) == 8
 
 
-def test_autotune_late_game_returns_two():
-    """5+ reveal points → late-game → K=2 (cheap correctness)."""
+def test_autotune_late_game_returns_requested_k():
+    """Auto-tune disabled: returns requested_k unmodified.
+    Was: late-game returned K=2 regardless of higher requested_k.
+    THIS WAS THE BUG that prompted Option A — env K=4 dropping to 2."""
     tracker = BeliefTracker()
-    # 4 moves + 1 item = 5 points.
     tracker.on_reveal_move("dragapult", "dracometeor")
     tracker.on_reveal_move("dragapult", "shadowball")
     tracker.on_reveal_move("dragapult", "uturn")
     tracker.on_reveal_move("dragapult", "flamethrower")
     tracker.on_reveal_item("dragapult", "choicespecs")
     opp = [_opp_mon("dragapult", item="choicespecs")]
-    assert proxy._choose_pimc_k_from_belief(8, tracker, opp) == 2
+    # Was 2 with auto-tune, now 8 (the requested ceiling).
+    assert proxy._choose_pimc_k_from_belief(8, tracker, opp) == 8
 
 
 def test_autotune_late_game_caps_at_requested_ceiling():
