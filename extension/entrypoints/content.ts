@@ -21,6 +21,7 @@ import { renderMatrix } from '../panels/matrix';
 import { renderThreats } from '../panels/threats';
 import { fetchExplanation } from '../lib/explainer';
 import { renderExplainer } from '../panels/explainer';
+import { renderPimcVoteBar } from '../panels/pimc-vote-bar';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -51,6 +52,7 @@ export default defineContentScript({
         <div class="sc-stats">—</div>
         <div class="sc-pv">PV: —</div>
         <div class="sc-alts">—</div>
+        <div class="sc-pimc-pinned"></div>
         <div class="sc-notes-header" title="Battle note (press N for per-turn notes)">📝 Battle note <span class="sc-notes-toggle">[show]</span></div>
         <div class="sc-notes-body" style="display:none"><textarea class="sc-battle-note" placeholder="Free-form notes for this battle..." spellcheck="false"></textarea></div>
       </div>
@@ -198,6 +200,60 @@ export default defineContentScript({
         color: #aaa; font-size: 10px;
         margin-left: 8px; white-space: nowrap;
       }
+      /* PIMC vote-bar card. Compact layout, fits inside the 320px panel.
+         Pinned summary line goes at the top of the panel; the full vote
+         table lives inside an expandable card so it doesn't push other
+         cards out of view. */
+      #sc-panel .sc-pimc-pinned {
+        font-size: 11px; color: #cde; padding: 3px 0;
+        border-top: 1px dotted #2a2a2a; margin-top: 4px;
+        display: none;
+      }
+      #sc-panel .sc-pimc-pinned.visible { display: block; }
+      #sc-panel .sc-pimc-pinned.split { color: #ffd9a8; }
+      #sc-panel .sc-pimc-pinned .sc-pimc-badge {
+        display: inline-block; margin-left: 6px; padding: 0 4px;
+        background: #1f3a4a; color: #9cf; border-radius: 2px;
+        font-size: 9px; font-weight: bold; vertical-align: middle;
+      }
+      #sc-panel .sc-pimc-header {
+        font-size: 11px; padding: 3px 0; color: #ddd;
+      }
+      #sc-panel .sc-pimc-header.sc-pimc-split {
+        background: #4a3a1f; color: #ffd9a8; padding: 3px 6px; border-radius: 3px;
+      }
+      #sc-panel .sc-pimc-summary { font-weight: bold; }
+      #sc-panel .sc-pimc-badge {
+        display: inline-block; margin-left: 6px; padding: 0 4px;
+        background: #1f3a4a; color: #9cf; border-radius: 2px;
+        font-size: 9px; font-weight: bold;
+      }
+      #sc-panel .sc-pimc-split-tag {
+        display: inline-block; margin-left: 6px;
+        color: #ffb060; font-size: 10px; font-weight: bold;
+      }
+      #sc-panel .sc-pimc-table { margin-top: 4px; }
+      #sc-panel .sc-pimc-row {
+        padding: 3px 4px; border-top: 1px dotted #2a2a2a;
+      }
+      #sc-panel .sc-pimc-row-top { background: #18242c; }
+      #sc-panel .sc-pimc-row-line {
+        display: flex; gap: 6px; align-items: baseline;
+      }
+      #sc-panel .sc-pimc-move {
+        flex: 1; font-weight: bold; color: #7fe;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      #sc-panel .sc-pimc-votes {
+        color: #ddd; font-size: 11px; min-width: 32px; text-align: right;
+      }
+      #sc-panel .sc-pimc-share {
+        color: #aaa; font-size: 10px; min-width: 36px; text-align: right;
+      }
+      #sc-panel .sc-pimc-opps {
+        font-size: 10px; color: #888; margin-top: 2px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
     `;
     document.head.appendChild(style);
     document.body.appendChild(panel);
@@ -213,6 +269,7 @@ export default defineContentScript({
     const notesBodyEl = panel.querySelector<HTMLDivElement>('.sc-notes-body')!;
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
     const battleNoteTextarea = panel.querySelector<HTMLTextAreaElement>('.sc-battle-note')!;
+    const pimcPinnedEl = panel.querySelector<HTMLDivElement>('.sc-pimc-pinned')!;
 
     // ---- Damage matrix card --------------------------------------------
     // Expandable card showing opp→us damage % per (attacker, defender) pair,
@@ -299,6 +356,23 @@ export default defineContentScript({
         if (room?.battle && room?.id) {
           refreshMatrix(room.battle, room).then(() => refreshThreats(room.battle));
         }
+      }
+    });
+
+    // ---- PIMC vote-bar card ---------------------------------------------
+    // Per-hypothesis vote distribution from the PIMC proxy mode (only
+    // populated when POKE_PROXY_PIMC_K > 0 and the engine emits
+    // `pimcBreakdown` on its `final` event). Renders one row per unique
+    // top_move with vote count, mean visit_share, and the opp_summary
+    // strings that produced each vote — surfaces consensus vs split
+    // decisions to the user.
+    const pimcCard = mountExpandableCard(cardsRoot, 'pimc', '🗳 PIMC votes');
+    let lastPimcBreakdown: any[] | null = null;
+    let lastPimcBest: string | null = null;
+    renderPimcVoteBar(pimcCard.body, null, null);
+    pimcCard.toggleBtn.addEventListener('click', () => {
+      if (pimcCard.isExpanded) {
+        renderPimcVoteBar(pimcCard.body, lastPimcBreakdown, lastPimcBest);
       }
     });
 
@@ -808,6 +882,45 @@ export default defineContentScript({
         .slice(0, 3)
         .map((a: any) => `${labelMove(a.move)} ${((a.confidence || 0) * 100).toFixed(0)}%`)
         .join(' | ') || '—';
+      // PIMC vote bar — only present when the proxy is in PIMC mode. We
+      // intentionally render on every `final` update (cheap) so a stale
+      // breakdown from a prior turn doesn't linger; if the field is absent
+      // the pinned line stays hidden and the card body says "no PIMC data".
+      if (u.event === 'final') {
+        updatePimcDisplay(u);
+      }
+    }
+
+    function updatePimcDisplay(u: any) {
+      const breakdown = Array.isArray(u?.pimcBreakdown) ? u.pimcBreakdown : null;
+      if (!breakdown || breakdown.length === 0) {
+        // Single-modal response → clear pinned line, leave card body in
+        // its empty state so user gets a clear "no PIMC" hint if they
+        // expand it.
+        lastPimcBreakdown = null;
+        lastPimcBest = null;
+        pimcPinnedEl.classList.remove('visible', 'split');
+        pimcPinnedEl.textContent = '';
+        if (pimcCard.isExpanded) renderPimcVoteBar(pimcCard.body, null, null);
+        return;
+      }
+      lastPimcBreakdown = breakdown;
+      lastPimcBest = typeof u?.bestMove === 'string' ? u.bestMove : null;
+      const k = breakdown.length;
+      const consensus = lastPimcBest ?? (breakdown[0]?.top_move ?? '(unknown)');
+      const agree = breakdown.filter((h: any) => h?.top_move === consensus).length;
+      const split = agree < k;
+      pimcPinnedEl.classList.add('visible');
+      pimcPinnedEl.classList.toggle('split', split);
+      pimcPinnedEl.innerHTML =
+        `${agree} of ${k} hypotheses agree on: <b>${escapePimcText(String(consensus))}</b>` +
+        `<span class="sc-pimc-badge">PIMC: K=${k}</span>` +
+        (split ? ' <span class="sc-pimc-split-tag">⚠ split</span>' : '');
+      if (pimcCard.isExpanded) renderPimcVoteBar(pimcCard.body, breakdown, lastPimcBest);
+    }
+
+    function escapePimcText(s: string): string {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     // ---- engine call with native fetch streaming ------------------------

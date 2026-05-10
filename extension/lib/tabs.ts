@@ -2,7 +2,7 @@
 // inline-expandable cards (Damage matrix, Threats, Why, Annotation) under
 // the pinned Recommendation section.
 
-export type CardId = 'matrix' | 'threats' | 'explainer' | 'annotation';
+export type CardId = 'matrix' | 'threats' | 'explainer' | 'annotation' | 'pimc';
 
 export type Card = {
   id: CardId;
