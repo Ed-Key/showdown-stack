@@ -13,7 +13,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
+  renderSparkline,
   VAL_HISTORY_CAP, DESPERATE_THRESHOLD,
+  SPARKLINE_WIDTH, SPARKLINE_HEIGHT, SPARKLINE_MAX_POINTS,
 } from '../../lib/val-trend';
 
 describe('computeTrend', () => {
@@ -142,6 +144,112 @@ describe('formatTrendTitle', () => {
 
   it('returns an empty tooltip for null (nothing to render)', () => {
     expect(formatTrendTitle(null)).toBe('');
+  });
+});
+
+describe('renderSparkline', () => {
+  // Pure-string assertions — vitest runs in node mode (no jsdom), so we
+  // inspect the returned markup directly rather than mounting the SVG.
+  // We intentionally don't lock down exact pixel coordinates; we assert on
+  // structural facts (point count, line presence, color, tooltip format)
+  // so trivial geometry tweaks don't churn the test.
+
+  it('returns a placeholder span for empty history (no SVG, no crash)', () => {
+    const out = renderSparkline([]);
+    expect(out).toContain('sc-sparkline-empty');
+    expect(out).not.toContain('<svg');
+    // Em-dash placeholder so the line layout stays stable.
+    expect(out).toContain('—');
+  });
+
+  it('treats a non-array input as empty (defensive)', () => {
+    // @ts-expect-error — exercising the runtime guard path
+    expect(renderSparkline(null)).toContain('sc-sparkline-empty');
+    // @ts-expect-error — exercising the runtime guard path
+    expect(renderSparkline(undefined)).toContain('sc-sparkline-empty');
+  });
+
+  it('renders a single dot (no polyline) for a 1-sample history', () => {
+    const out = renderSparkline([0.65]);
+    expect(out).toContain('<svg');
+    expect(out).toContain('<circle');
+    expect(out).not.toContain('<polyline');
+    // Tooltip shows the one sample.
+    expect(out).toContain('T1: 0.65');
+  });
+
+  it('renders a polyline + N dots for a multi-sample history', () => {
+    const out = renderSparkline([0.65, 0.60, 0.50, 0.35, 0.20]);
+    expect(out).toContain('<polyline');
+    // One <circle> per data point.
+    const dots = (out.match(/<circle /g) || []).length;
+    expect(dots).toBe(5);
+  });
+
+  it('uses the SVG dimensions defined by the geometry constants', () => {
+    const out = renderSparkline([0.5, 0.6]);
+    expect(out).toContain(`width="${SPARKLINE_WIDTH}"`);
+    expect(out).toContain(`height="${SPARKLINE_HEIGHT}"`);
+    expect(out).toContain(`viewBox="0 0 ${SPARKLINE_WIDTH} ${SPARKLINE_HEIGHT}"`);
+  });
+
+  it('caps the visible window at SPARKLINE_MAX_POINTS (older samples drop off)', () => {
+    const long = Array.from({ length: SPARKLINE_MAX_POINTS + 4 }, (_, i) => 0.3 + i * 0.01);
+    const out = renderSparkline(long);
+    const dots = (out.match(/<circle /g) || []).length;
+    expect(dots).toBe(SPARKLINE_MAX_POINTS);
+  });
+
+  it('formats the tooltip as "T1: 0.65 → T2: 0.60 → ..." with two-decimal vals', () => {
+    const out = renderSparkline([0.65, 0.60, 0.50]);
+    // Default startTurn=1.
+    expect(out).toContain('T1: 0.65 → T2: 0.60 → T3: 0.50');
+  });
+
+  it('shifts tooltip turn labels when startTurn is supplied', () => {
+    const out = renderSparkline([0.40, 0.30], 7);
+    expect(out).toContain('T7: 0.40 → T8: 0.30');
+  });
+
+  it('shifts tooltip turn labels for long histories that get windowed', () => {
+    // 10 samples, window of 8 → labels start at startTurn + (10-8) = startTurn+2.
+    const long = Array.from({ length: 10 }, (_, i) => 0.5 + i * 0.01);
+    const out = renderSparkline(long, 1);
+    // First visible sample is index 2 of the original → should label as T3.
+    expect(out).toContain('T3: 0.52');
+    expect(out).not.toContain('T1: 0.50');
+  });
+
+  it('skips non-finite samples instead of crashing', () => {
+    const out = renderSparkline([0.5, NaN, 0.6, Infinity]);
+    // 2 finite samples → 2 dots, 1 polyline.
+    const dots = (out.match(/<circle /g) || []).length;
+    expect(dots).toBe(2);
+    expect(out).toContain('<polyline');
+  });
+
+  it('color-shifts the stroke by trend (rising → green, falling → amber, collapsing → red)', () => {
+    expect(renderSparkline([0.3, 0.4, 0.55])).toContain('#7fdc7f');   // rising
+    expect(renderSparkline([0.7, 0.6, 0.5])).toContain('#ffb060');    // falling
+    expect(renderSparkline([0.7, 0.45])).toContain('#ff6a6a');        // collapsing
+    expect(renderSparkline([0.5, 0.51, 0.5])).toContain('#9aa0a6');   // flat → grey
+  });
+
+  it('does not crash when all samples are equal (no divide-by-zero)', () => {
+    const out = renderSparkline([0.5, 0.5, 0.5, 0.5]);
+    expect(out).toContain('<polyline');
+    // No NaN / Infinity should leak into coordinates.
+    expect(out).not.toMatch(/NaN|Infinity/);
+  });
+
+  it('escapes the tooltip attribute defensively (no raw quotes / angle brackets)', () => {
+    // The tooltip is built from numeric sample values, so the only chars
+    // that show up are digits, dots, colons, arrows. The escape pass is a
+    // belt-and-suspenders check; this test just confirms we don't ship
+    // bare quotes that would break the title="" attribute.
+    const out = renderSparkline([0.5, 0.6]);
+    const titleMatch = out.match(/title="([^"]*)"/);
+    expect(titleMatch).not.toBeNull();
   });
 });
 

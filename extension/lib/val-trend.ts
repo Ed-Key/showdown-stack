@@ -110,6 +110,117 @@ export function appendVal(history: readonly number[], val: number): number[] {
   return next;
 }
 
+/** Sparkline geometry. Tuned for an inline 60-80px wide indicator beside the
+ * trend arrow; adjust here rather than in CSS so SVG viewBox stays in sync. */
+export const SPARKLINE_WIDTH = 70;
+export const SPARKLINE_HEIGHT = 16;
+export const SPARKLINE_MAX_POINTS = 8;
+const SPARKLINE_PAD_X = 2;
+const SPARKLINE_PAD_Y = 3;
+
+/**
+ * Render a tiny inline sparkline of recent val samples as an SVG string.
+ *
+ * Companion to the trend arrow: where the arrow gives a binary direction,
+ * the sparkline shows the *shape* of the last N turns. A steady plateau,
+ * a slow decline, and a cliff all read differently even when the latest
+ * delta yields the same arrow.
+ *
+ * Behavior:
+ *  - 0 samples → a neutral em-dash placeholder (so the layout doesn't shift
+ *    on turn 1 — same reasoning as `formatTrendArrow` returning '' on null).
+ *  - 1 sample  → a single dot at the right edge.
+ *  - 2+        → polyline of the last `SPARKLINE_MAX_POINTS` samples plus
+ *    a dot at every data point. y-axis is auto-scaled across [min, max] of
+ *    the visible window so small wobbles read as small wobbles.
+ *  - line color: green (rising), amber (falling), red (collapsing), grey
+ *    otherwise — derived from `computeTrend(window)` so the chart agrees
+ *    with the arrow next to it.
+ *  - tooltip (`<title>`) lists each sample as "T1: 0.61 → T2: 0.59 → ...".
+ *    `startTurn` shifts the labels so they match the actual game turn the
+ *    user sees in the panel; defaults to 1 when omitted.
+ *
+ * Pure / framework-free: returns a string the caller drops into innerHTML.
+ * No mutation, no DOM access — testable under node-mode vitest.
+ */
+export function renderSparkline(history: readonly number[], startTurn: number = 1): string {
+  const safe = Array.isArray(history)
+    ? history.filter((v) => Number.isFinite(v))
+    : [];
+
+  // Empty placeholder. Em-dash centered in the same bounding box keeps the
+  // confidence line from reflowing when the sparkline appears on turn 2.
+  if (safe.length === 0) {
+    return (
+      `<span class="sc-sparkline sc-sparkline-empty" ` +
+      `title="no engine confidence history yet" ` +
+      `aria-label="no engine confidence history yet">—</span>`
+    );
+  }
+
+  const window = safe.slice(-SPARKLINE_MAX_POINTS);
+  const baseTurn = startTurn + (safe.length - window.length);
+  const tooltip = window
+    .map((v, i) => `T${baseTurn + i}: ${v.toFixed(2)}`)
+    .join(' → ');
+  const tipAttr = tooltip
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Map trend → stroke color so the sparkline reinforces the arrow.
+  const trend = computeTrend(window);
+  const stroke =
+    trend === 'rising' ? '#7fdc7f' :
+    trend === 'falling' ? '#ffb060' :
+    trend === 'collapsing' ? '#ff6a6a' :
+    '#9aa0a6';
+
+  const w = SPARKLINE_WIDTH;
+  const h = SPARKLINE_HEIGHT;
+  const innerW = w - SPARKLINE_PAD_X * 2;
+  const innerH = h - SPARKLINE_PAD_Y * 2;
+
+  // Auto-scale y across the visible window. If everything is identical,
+  // collapse to a flat midline (avoids divide-by-zero and a misleading dip).
+  let min = Math.min(...window);
+  let max = Math.max(...window);
+  if (max === min) { min -= 0.005; max += 0.005; }
+  const range = max - min;
+
+  const xFor = (i: number) =>
+    window.length === 1
+      ? w - SPARKLINE_PAD_X
+      : SPARKLINE_PAD_X + (i / (window.length - 1)) * innerW;
+  const yFor = (v: number) =>
+    SPARKLINE_PAD_Y + (1 - (v - min) / range) * innerH;
+
+  const points = window
+    .map((v, i) => `${xFor(i).toFixed(2)},${yFor(v).toFixed(2)}`)
+    .join(' ');
+
+  // Single sample: just a dot, no polyline (a 1-point polyline is invisible).
+  const polyline =
+    window.length >= 2
+      ? `<polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>`
+      : '';
+  const dots = window
+    .map((v, i) =>
+      `<circle cx="${xFor(i).toFixed(2)}" cy="${yFor(v).toFixed(2)}" r="1.2" fill="${stroke}"/>`,
+    )
+    .join('');
+
+  return (
+    `<span class="sc-sparkline" title="${tipAttr}" aria-label="${tipAttr}">` +
+    `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">` +
+    `<title>${tipAttr}</title>` +
+    `${polyline}${dots}` +
+    `</svg>` +
+    `</span>`
+  );
+}
+
 /**
  * Whether the current val warrants the DESPERATE tag.
  *

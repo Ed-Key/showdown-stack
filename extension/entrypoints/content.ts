@@ -24,6 +24,7 @@ import { renderExplainer } from '../panels/explainer';
 import { renderPimcVoteBar } from '../panels/pimc-vote-bar';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
+  renderSparkline,
   type Trend,
 } from '../lib/val-trend';
 
@@ -123,6 +124,20 @@ export default defineContentScript({
       #sc-panel .sc-trend-arrow.sc-trend-rising { color: #7fdc7f; }
       #sc-panel .sc-trend-arrow.sc-trend-falling { color: #ffb060; }
       #sc-panel .sc-trend-arrow.sc-trend-collapsing { color: #ff6a6a; }
+      /* Inline SVG sparkline of recent val samples. Sits beside the trend
+         arrow on the same baseline; vertical-align middle keeps the SVG
+         from dropping below the text descender. The empty placeholder
+         (em-dash) renders as a faded glyph so turn 1 doesn't look broken. */
+      #sc-panel .sc-sparkline {
+        display: inline-block; vertical-align: middle;
+        margin-left: 6px; line-height: 0;
+        cursor: help;
+      }
+      #sc-panel .sc-sparkline svg { display: block; }
+      #sc-panel .sc-sparkline-empty {
+        color: #555; font-size: 11px; line-height: 1;
+        letter-spacing: 1px;
+      }
       /* DESPERATE tag — fires when val < 0.30 and (when in PIMC mode) the
          hypotheses agree. Visually loud so user can't miss it. */
       #sc-panel .sc-desperate {
@@ -966,8 +981,19 @@ export default defineContentScript({
         ? ` <span class="sc-desperate" title="engine is recommending the least-bad move from a losing position. Consider sacrificing this mon or switching out.">DESPERATE</span>`
         : '';
 
+      // Sparkline of recent val samples. Only meaningful on `final` events
+      // (we don't pollute history with mid-search intermediate values, so
+      // showing one for streamed updates would be stale/misleading). On
+      // turn 1 the helper renders a neutral em-dash placeholder so the
+      // confidence line doesn't reflow when the chart appears on turn 2.
+      let sparklineHtml = '';
+      if (u.event === 'final' && battleId) {
+        const hist = valHistoryByBattle.get(battleId) ?? [];
+        sparklineHtml = ' ' + renderSparkline(hist);
+      }
+
       bestEl.innerHTML =
-        `${escapeHtmlText(labelMove(u.bestMove))}  ${arrow} ${conf}%${trendHtml}${desperateHtml}`;
+        `${escapeHtmlText(labelMove(u.bestMove))}  ${arrow} ${conf}%${trendHtml}${sparklineHtml}${desperateHtml}`;
 
       statsEl.textContent =
         `sims ${(u.sims || 0).toLocaleString()}  depth ${u.depth || 0}` +
