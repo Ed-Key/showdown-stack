@@ -24,9 +24,11 @@ import { renderExplainer } from '../panels/explainer';
 import { renderPimcVoteBar } from '../panels/pimc-vote-bar';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
-  renderSparkline,
+  renderSparkline, computeTrendArrow,
   type Trend,
 } from '../lib/val-trend';
+import { renderTcgCard, type TcgCardProps, type AlternativeMove } from '../panels/tcg-card';
+import '../styles/tcg.css';
 
 export default defineContentScript({
   matches: ['https://play.pokemonshowdown.com/*'],
@@ -36,6 +38,19 @@ export default defineContentScript({
   main() {
     // page-context globals (declared loose so TS doesn't choke)
     const win: any = window;
+
+    // Inject the Google Fonts referenced by styles/tcg.css. Without this the
+    // TCG card falls back to system fonts and the design breaks. The guard
+    // makes the call idempotent in case main() is somehow invoked twice.
+    function ensureGoogleFonts(): void {
+      if (document.getElementById('sc-google-fonts')) return;
+      const link = document.createElement('link');
+      link.id = 'sc-google-fonts';
+      link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=Bowlby+One+SC&family=Public+Sans:wght@400;600;700;800;900&family=Spectral:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;700&display=swap';
+      document.head.appendChild(link);
+    }
+    ensureGoogleFonts();
 
     // Plan H proxy on :7271 forwards to engine on :7267 with belief-aware
     // opp-Pokemon overlays. If the proxy isn't running the request fails;
@@ -922,6 +937,76 @@ export default defineContentScript({
       return { move: bestMove, isSwitch: false };
     }
 
+    /**
+     * Map an engine update + battle state into TcgCardProps.
+     * Pulls trend from the per-battle val-history, threats from lastThreats.
+     *
+     * `u` is the engine update event (no project-side TS type defined — fields
+     * accessed: bestMove, alternatives, confidence, pimcBreakdown). `threats`
+     * is a ThreatsReport | null. We use `any` on opaque inputs because the
+     * engine update isn't a project type; tightening can land in Tasks 11+.
+     */
+    function buildTcgPropsFromUpdate(
+      u: any,
+      battle: any,
+      valHistory: number[],
+      llmExplanation: string,
+      threats: ThreatsReport | null,
+    ): TcgCardProps {
+      const trend = computeTrendArrow(valHistory);
+      const activeSpecies = battle?.mySide?.active?.[0]?.speciesForme ?? '';
+      // Pick the worst on-field threat (already sorted desc by max dmg in
+      // computeThreats). Fall back to the first incoming threat, else NONE.
+      const topThreat = threats?.onField?.[0] ?? threats?.incoming?.[0] ?? null;
+      const worstVictim = topThreat
+        ? [...topThreat.victims].sort((a, b) => b.dmgPct - a.dmgPct)[0]
+        : null;
+      const worstThreat = {
+        name: topThreat ? topThreat.oppSpecies : 'NONE',
+        dmgPct: worstVictim ? Math.round(worstVictim.dmgPct) : 0,
+        isOhko: !!(worstVictim && worstVictim.ohko),
+      };
+      const flairByType: Record<string, string> = {
+        Ice: '❄', Fire: '🔥', Electric: '⚡', Water: '💧',
+        Grass: '🌿', Psychic: '✨', Fighting: '👊',
+        Dark: '🌑', Steel: '⚙', Fairy: '✦',
+      };
+      // The engine update does not surface move-type — default to Normal so
+      // the energy palette falls back to colorless. Tasks 8+ can wire a move
+      // → type lookup via Dex if needed.
+      const recommendedMoveType = (u.moveType as string | undefined) ?? 'Normal';
+      const alternatives: AlternativeMove[] = (u.alternatives ?? [])
+        .slice(0, 4)
+        .map((a: any) => ({
+          name: String(a.move ?? a.name ?? ''),
+          type: (a.type as string | undefined) ?? 'Normal',
+          votes: typeof a.votes === 'number' ? a.votes : 0,
+          voteCap: 4,
+          winPct: Math.round((a.confidence ?? 0) * 100),
+          category: ((a.category as string | undefined) ?? 'P') as 'P' | 'S' | 'T',
+          isRecommended: (a.move ?? a.name) === u.bestMove,
+          desc: String(a.desc ?? ''),
+        }));
+      return {
+        recommendedMove: String(u.bestMove ?? ''),
+        moveType: recommendedMoveType,
+        trend,
+        activeSpecies,
+        turn: battle?.turn ?? 0,
+        trendTag: `${trend.arrow} LAST 3`,
+        hypsTag: Array.isArray(u?.pimcBreakdown) && u.pimcBreakdown.length > 0
+          ? `${u.pimcBreakdown.length}/4 HYPS`
+          : 'SINGLE',
+        winPct: Math.round((u.confidence ?? 0) * 100),
+        llmExplanation: llmExplanation || 'Analyzing turn…',
+        alternatives,
+        worstThreat,
+        retreatCost: 2,
+        sparklineHistory: valHistory,
+        flairChar: flairByType[recommendedMoveType] ?? '◆',
+      };
+    }
+
     function renderUpdate(u: any) {
       const arrow = u.event === 'final' ? '▲' : '•';
       const confRaw = u.confidence || 0;
@@ -992,8 +1077,40 @@ export default defineContentScript({
         sparklineHtml = ' ' + renderSparkline(hist);
       }
 
-      bestEl.innerHTML =
-        `${escapeHtmlText(labelMove(u.bestMove))}  ${arrow} ${conf}%${trendHtml}${sparklineHtml}${desperateHtml}`;
+      // New TCG card rendering — replaces the inline .sc-best HTML write.
+      // On first call we swap the legacy .sc-best element with the card; on
+      // subsequent calls we replace the existing card in place. The val-
+      // history map populated above on `final` events feeds the sparkline.
+      //
+      // NOTE: legacy code still writes to the cached `bestEl` reference
+      // (error paths, applyForceSwitchOverride, lead-pick preview at lines
+      // ~1204/1213/1417/1691/1703/1718/1793). After the first replaceWith
+      // those writes target a detached node and silently no-op. Tasks 8-11
+      // will migrate those paths into the new card surfaces.
+      {
+        const battleForCard = win.app?.curRoom?.battle;
+        const battleIdForCard: string | undefined = win.app?.curRoom?.id;
+        const valHist = battleIdForCard
+          ? (valHistoryByBattle.get(battleIdForCard) ?? [])
+          : [];
+        const tcgProps = buildTcgPropsFromUpdate(
+          u,
+          battleForCard,
+          valHist,
+          '',                       // LLM explanation — Tasks 8+ wire this in
+          lastThreats ?? null,
+        );
+        const newCard = renderTcgCard(tcgProps);
+        const existingCard = panel.querySelector('.sc-tcg-card');
+        const oldBest = panel.querySelector('.sc-best');
+        if (existingCard) {
+          existingCard.replaceWith(newCard);
+        } else if (oldBest) {
+          oldBest.replaceWith(newCard);
+        } else {
+          panel.appendChild(newCard);
+        }
+      }
 
       statsEl.textContent =
         `sims ${(u.sims || 0).toLocaleString()}  depth ${u.depth || 0}` +
