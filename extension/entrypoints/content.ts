@@ -129,42 +129,14 @@ export default defineContentScript({
         background: #2a2a2a;
         color: #aaa;
       }
-      #sc-panel .sc-best { font-size: 17px; font-weight: bold; color: #7fe; margin: 4px 0; }
-      /* Trend arrow rendered inline next to the confidence percent. Color
-         encodes direction: green = rising, amber = falling, red = collapsing.
-         No glyph is rendered when trend is flat / unknown (degrades cleanly
-         on turn 1 when there's no history). */
-      #sc-panel .sc-trend-arrow {
-        display: inline-block; margin-left: 6px;
-        font-size: 14px; font-weight: bold; vertical-align: middle;
-        cursor: help;
-      }
-      #sc-panel .sc-trend-arrow.sc-trend-rising { color: #7fdc7f; }
-      #sc-panel .sc-trend-arrow.sc-trend-falling { color: #ffb060; }
-      #sc-panel .sc-trend-arrow.sc-trend-collapsing { color: #ff6a6a; }
-      /* Inline SVG sparkline of recent val samples. Sits beside the trend
-         arrow on the same baseline; vertical-align middle keeps the SVG
-         from dropping below the text descender. The empty placeholder
-         (em-dash) renders as a faded glyph so turn 1 doesn't look broken. */
-      #sc-panel .sc-sparkline {
-        display: inline-block; vertical-align: middle;
-        margin-left: 6px; line-height: 0;
-        cursor: help;
-      }
-      #sc-panel .sc-sparkline svg { display: block; }
-      #sc-panel .sc-sparkline-empty {
-        color: #555; font-size: 11px; line-height: 1;
-        letter-spacing: 1px;
-      }
-      /* DESPERATE tag — fires when val < 0.30 and (when in PIMC mode) the
-         hypotheses agree. Visually loud so user can't miss it. */
-      #sc-panel .sc-desperate {
-        display: inline-block; margin-left: 8px;
-        padding: 1px 6px; border-radius: 3px;
-        background: #5a1f1f; color: #fff;
-        font-size: 11px; font-weight: bold; letter-spacing: 0.5px;
-        vertical-align: middle; cursor: help;
-      }
+      /* .sc-best, .sc-trend-arrow*, .sc-sparkline*, .sc-desperate were
+         removed in Task 12 — the TCG card (panels/tcg-card.ts, styled via
+         styles/tcg.css) now owns the recommendation row including its own
+         trend slot, sparkline and confidence badge. The legacy <div class=
+         "sc-best"> element is still in the initial panel HTML (so the
+         "Copilot — idle" first paint has something to swap out) but it's
+         replaced by the TCG card on the first engine update and never
+         restyled afterward; its CSS rule is dead weight. */
       #sc-panel .sc-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
       #sc-panel .sc-pv { font-size: 11px; color: #ddd; margin-bottom: 4px; word-break: break-word; }
       #sc-panel .sc-alts { font-size: 11px; color: #ccc; word-break: break-word; }
