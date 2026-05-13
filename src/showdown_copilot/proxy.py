@@ -347,6 +347,50 @@ def _ingest_reveals(
             tracker.on_terastallize(species, pkmn["teraType"])
 
 
+def _apply_transform_if_present(pkmn: dict[str, Any]) -> bool:
+    """Apply a poke-env-style Transform overlay if the extension forwarded
+    `transformedInto` for this Pokemon. Returns True if applied (caller skips
+    chaos-modal padding), False otherwise.
+
+    Reference: github.com/hsahovic/poke-env Pokemon.transform(). The Showdown
+    `|-transform|USER|SPECIES` event provides only the species; the receiving
+    client must derive everything else from its memory of the target. Fields
+    copied: types, moves (PP=5 in gen5+), stats (NOT HP/maxhp), ability,
+    boosts. Fields NOT copied: HP, status, item, level, tera state — Ditto
+    Teras to its OWN preview Tera type, not the target's.
+    """
+    xform = pkmn.get("transformedInto")
+    if not xform:
+        return False
+
+    # Types: explicit list overwrites base types. Caller must pass the
+    # target's base dex types (Soak'd target uses base, not effective).
+    types = xform.get("types")
+    if isinstance(types, list) and types:
+        pkmn["types"] = list(types)
+
+    # Ability: copy target's active ability.
+    if xform.get("ability"):
+        pkmn["ability"] = xform["ability"]
+
+    # Stats: copy target's stats EXCEPT hp/maxhp (Ditto keeps own HP).
+    for k in ("attack", "defense", "specialAttack", "specialDefense", "speed"):
+        if k in xform:
+            pkmn[k] = xform[k]
+
+    # Moves: copy target's revealed moveset, PP=5 each (gen5+ Transform rule).
+    # Pad to 4 slots with the engine's "none" sentinel.
+    moves_in = xform.get("moves") or []
+    move_objs: list[dict[str, Any]] = [
+        {"id": m, "pp": 5, "disabled": False} for m in moves_in[:4] if m
+    ]
+    while len(move_objs) < 4:
+        move_objs.append({"id": "none", "pp": 0, "disabled": False})
+    pkmn["moves"] = move_objs
+
+    return True
+
+
 def _apply_modal(pkmn: dict[str, Any], tracker: BeliefTracker, fmt: str) -> None:
     """Overlay belief-aware modal on a single opp Pokemon dict in-place.
 
@@ -366,6 +410,16 @@ def _apply_modal(pkmn: dict[str, Any], tracker: BeliefTracker, fmt: str) -> None
     # reserve, which causes the chaos 404 retry storm on unsupported formats.
     if not species or species == "none":
         return False
+
+    # Transform / Imposter short-circuit. When the extension forwards
+    # `transformedInto` (computed from Showdown DOM's pkmn.volatiles.transform),
+    # apply poke-env-style Transform: copy target's types/moves/stats/ability
+    # and the boosts that were live at transform time. HP/item/status/tera
+    # stay native to the transforming Pokemon. Bypasses chaos-modal because
+    # the post-Transform state is fully known — sampling would introduce noise.
+    if _apply_transform_if_present(pkmn):
+        return True
+
     assert _priors is not None
 
     belief = tracker.get(species)
@@ -632,6 +686,14 @@ def _sample_one_set_for_pkmn(
     species = pkmn.get("species", "")
     if not species or species == "none":
         return None
+
+    # Transform short-circuit (mirrors _apply_modal). Each PIMC hypothesis
+    # gets the same Transform overlay because the post-Transform state is
+    # fully known — only the chaos-sampled fields should vary across K.
+    if pkmn.get("transformedInto"):
+        out = copy.deepcopy(pkmn)
+        _apply_transform_if_present(out)
+        return out
 
     belief = tracker.get(species)
     display_name = _resolve_display_species(species, resolved_fmt)
