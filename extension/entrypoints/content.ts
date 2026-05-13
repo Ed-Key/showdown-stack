@@ -28,6 +28,9 @@ import {
   type Trend,
 } from '../lib/val-trend';
 import { renderTcgCard, type TcgCardProps, type AlternativeMove } from '../panels/tcg-card';
+import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
+import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
+import { renderPvChain, type PvStep } from '../panels/pv-chain';
 import '../styles/tcg.css';
 
 export default defineContentScript({
@@ -325,6 +328,82 @@ export default defineContentScript({
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
     const battleNoteTextarea = panel.querySelector<HTMLTextAreaElement>('.sc-battle-note')!;
     const pimcPinnedEl = panel.querySelector<HTMLDivElement>('.sc-pimc-pinned')!;
+
+    // ---- Status overlay (TCG dashboard) --------------------------------
+    // Banner above the TCG card for force-switch / engine-error / lead-pick
+    // / bad-state messages. Replaces the legacy bestEl.innerHTML writes
+    // that silently no-op'd after Task 7 swapped .sc-best for the TCG card.
+    // Sits between the conflict banner and the TCG card; cleared on the
+    // next successful renderUpdate so stale errors don't linger.
+    function ensureStatusOverlay(): HTMLElement {
+      let overlay = panel.querySelector<HTMLElement>('.sc-status-overlay');
+      if (overlay) return overlay;
+      overlay = document.createElement('div');
+      overlay.className = 'sc-status-overlay hidden';
+      overlay.style.cssText = `
+        padding: 8px 14px;
+        background: rgba(40,40,52,0.95);
+        border-top: 1px solid #2a2a32;
+        border-bottom: 1px solid #2a2a32;
+        color: #ddd;
+        font-family: 'Spectral', serif;
+        font-style: italic;
+        font-size: 12.5px;
+        line-height: 1.4;
+        display: none;
+      `;
+      // Mount above the TCG card if it exists, otherwise append to panel.
+      const card = panel.querySelector('.sc-tcg-card');
+      if (card && card.parentElement) {
+        card.parentElement.insertBefore(overlay, card);
+      } else {
+        panel.appendChild(overlay);
+      }
+      return overlay;
+    }
+
+    function showStatusOverlay(message: string, severity: 'error' | 'info' = 'info'): void {
+      const o = ensureStatusOverlay();
+      o.classList.remove('hidden');
+      o.style.display = 'block';
+      o.style.color = severity === 'error' ? '#ff8888' : '#ddd';
+      o.textContent = message;
+    }
+
+    function hideStatusOverlay(): void {
+      const o = panel.querySelector<HTMLElement>('.sc-status-overlay');
+      if (o) {
+        o.classList.add('hidden');
+        o.style.display = 'none';
+      }
+    }
+
+    // Map legacy ConflictWarning.level → ConflictBanner severity. The new
+    // banner only supports three severities; legacy `info` falls back to
+    // POSSIBLE (it's mid-tier between STRONG and PIVOT and matches the
+    // legacy `info` styling intent: advisory, non-blocking).
+    function mapConflictSeverity(level: 'strong' | 'warn' | 'pivot' | 'info'): ConflictSeverity {
+      if (level === 'strong') return 'STRONG';
+      if (level === 'pivot') return 'PIVOT';
+      return 'POSSIBLE'; // 'warn' and 'info' both map here
+    }
+
+    function toPanelThreatRow(t: any): PanelThreatRow {
+      // Pick the worst victim from the legacy Threat.victims list — the
+      // panel renders one row per (move, source, target) tuple so we
+      // collapse the victim list to its top-damage entry.
+      const worst = (t?.victims ?? []).slice().sort(
+        (a: any, b: any) => (b?.dmgPct ?? 0) - (a?.dmgPct ?? 0),
+      )[0];
+      return {
+        move: String(t?.oppMove ?? ''),
+        source: String(t?.oppSpecies ?? ''),
+        target: String(worst?.species ?? ''),
+        dmgPct: Math.round(worst?.dmgPct ?? 0),
+        isOhko: !!worst?.ohko,
+        source_seen: t?.moveSource === 'revealed',
+      };
+    }
 
     // ---- Damage matrix card --------------------------------------------
     // Expandable card showing opp→us damage % per (attacker, defender) pair,
@@ -910,13 +989,33 @@ export default defineContentScript({
     }
 
     function renderConflict(c: ConflictWarning | null) {
-      if (!c) {
-        conflictEl.style.display = 'none';
-        return;
+      // Legacy .sc-conflict line stays hidden — the new banner above the
+      // TCG card is the single source of truth post-Task 11.
+      conflictEl.style.display = 'none';
+
+      const conflictProps: ConflictBannerProps | null = c
+        ? { severity: mapConflictSeverity(c.level), reason: c.message }
+        : null;
+      const newBanner = renderConflictBanner(conflictProps);
+      const oldBanner = panel.querySelector('.sc-conflict-banner');
+      if (oldBanner) {
+        oldBanner.replaceWith(newBanner);
+      } else {
+        // Insert above the status overlay if present, else above the TCG
+        // card. Both live inside .sc-pinned so the banner stays attached
+        // to the recommendation cluster.
+        const overlay = panel.querySelector('.sc-status-overlay');
+        if (overlay && overlay.parentElement) {
+          overlay.parentElement.insertBefore(newBanner, overlay);
+        } else {
+          const card = panel.querySelector('.sc-tcg-card');
+          if (card && card.parentElement) {
+            card.parentElement.insertBefore(newBanner, card);
+          } else {
+            panel.insertBefore(newBanner, panel.firstChild);
+          }
+        }
       }
-      conflictEl.textContent = c.message;
-      conflictEl.className = `sc-conflict ${c.level === 'strong' || c.level === 'pivot' ? '' : c.level === 'warn' ? 'warn' : 'info'}`;
-      conflictEl.style.display = 'block';
     }
 
     // Detect whether the engine's bestMove string is a switch (species name) or
@@ -1082,11 +1181,12 @@ export default defineContentScript({
       // subsequent calls we replace the existing card in place. The val-
       // history map populated above on `final` events feeds the sparkline.
       //
-      // NOTE: legacy code still writes to the cached `bestEl` reference
-      // (error paths, applyForceSwitchOverride, lead-pick preview at lines
-      // ~1204/1213/1417/1691/1703/1718/1793). After the first replaceWith
-      // those writes target a detached node and silently no-op. Tasks 8-11
-      // will migrate those paths into the new card surfaces.
+      // Task 11 redirected the 7 legacy bestEl.innerHTML write sites to
+      // ensureStatusOverlay() so force-switch / engine-error / lead-pick /
+      // bad-state messages still surface above the card. We clear that
+      // overlay here so a stale error from a prior turn doesn't linger
+      // once the engine returns a fresh valid update.
+      hideStatusOverlay();
       {
         const battleForCard = win.app?.curRoom?.battle;
         const battleIdForCard: string | undefined = win.app?.curRoom?.id;
@@ -1109,6 +1209,56 @@ export default defineContentScript({
           oldBest.replaceWith(newCard);
         } else {
           panel.appendChild(newCard);
+        }
+      }
+
+      // ---- Threats panel (Task 11) ---------------------------------------
+      // Replaces the legacy expandable .sc-trainer-card / threats card body.
+      // Reads from `lastThreats` (populated by refreshThreats elsewhere).
+      // Mounted directly after the TCG card inside .sc-pinned so the user
+      // sees the worst-case opp moves immediately under the recommendation.
+      {
+        const tcgCard = panel.querySelector('.sc-tcg-card');
+        const threatsProps = {
+          onField: (lastThreats?.onField ?? []).map(toPanelThreatRow),
+          incoming: (lastThreats?.incoming ?? []).map(toPanelThreatRow),
+        };
+        const newThreats = renderThreatsPanel(threatsProps);
+        const oldThreats = panel.querySelector('.sc-trainer-card');
+        if (oldThreats) {
+          oldThreats.replaceWith(newThreats);
+        } else if (tcgCard && tcgCard.parentElement) {
+          tcgCard.parentElement.insertBefore(newThreats, tcgCard.nextSibling);
+        } else {
+          panel.appendChild(newThreats);
+        }
+      }
+
+      // ---- PV chain (Task 11) --------------------------------------------
+      // Inline engine principal-variation chain. Mounted below the threats
+      // panel so the eye moves: recommended move → threats → engine line.
+      // Steps alternate me/opp by index (engine PV interleaves sides).
+      {
+        const pvList: any[] = Array.isArray(u?.pv) ? u.pv : [];
+        if (pvList.length > 0) {
+          const steps: PvStep[] = pvList.slice(0, 4).map((move: any, i: number) => ({
+            move: String(move ?? '').toUpperCase(),
+            side: (i % 2 === 0 ? 'me' : 'opp') as 'me' | 'opp',
+          }));
+          const newPv = renderPvChain({
+            steps,
+            depth: typeof u.depth === 'number' ? u.depth : 0,
+            sims: typeof u.sims === 'number' ? u.sims : 0,
+          });
+          const oldPv = panel.querySelector('.sc-pv-card');
+          const threatsEl = panel.querySelector('.sc-trainer-card');
+          if (oldPv) {
+            oldPv.replaceWith(newPv);
+          } else if (threatsEl && threatsEl.parentElement) {
+            threatsEl.parentElement.insertBefore(newPv, threatsEl.nextSibling);
+          } else {
+            panel.appendChild(newPv);
+          }
         }
       }
 
@@ -1201,7 +1351,7 @@ export default defineContentScript({
       if (switchesFromEngine.length) {
         const best = switchesFromEngine[0];
         hdrEl.textContent = 'Copilot — force switch';
-        bestEl.textContent = `→ ${best.species}  ▲ ${pct(best.confidence)}`;
+        showStatusOverlay(`FORCE SWITCH: → ${best.species}  ▲ ${pct(best.confidence)}`, 'info');
         altsEl.textContent = switchesFromEngine.slice(1, 4)
           .map((s: any) => `→ ${s.species} ${pct(s.confidence)}`)
           .join(' | ') || '—';
@@ -1210,7 +1360,7 @@ export default defineContentScript({
       }
       // Engine had no switch in top-K. Show plain-text guidance.
       hdrEl.textContent = 'Copilot — force switch (engine returned no switch)';
-      bestEl.textContent = '— manual pick required';
+      showStatusOverlay('FORCE SWITCH: — manual pick required', 'info');
       statsEl.textContent = 'engine top-K had only moves; matrix card may help';
     }
 
@@ -1414,7 +1564,7 @@ export default defineContentScript({
       } catch (e: any) {
         if (e.name === 'AbortError') return;
         hdrEl.textContent = 'Copilot — error (engine down?)';
-        bestEl.textContent = e.message || 'fetch failed';
+        showStatusOverlay(`Error: ${e.message || 'fetch failed'}`, 'error');
       } finally {
         if (abortCtrl === myCtrl) abortCtrl = null;
       }
@@ -1688,7 +1838,7 @@ export default defineContentScript({
             });
 
             hdrEl.textContent = 'Copilot — team preview';
-            bestEl.textContent = 'pick a lead — numbers below';
+            showStatusOverlay('LEAD PICK: pick a lead — numbers below', 'info');
             statsEl.textContent =
               `${mySnaps.length} candidates · ${oppCount} opps · matrix below for cell detail`;
             pvEl.innerHTML = rows.map((r: any) =>
@@ -1700,7 +1850,7 @@ export default defineContentScript({
           }).catch((err: any) => {
             console.warn('[sc:team-preview] leaderboard fetch failed', err);
             hdrEl.textContent = 'Copilot — team preview';
-            bestEl.textContent = '—';
+            showStatusOverlay('LEAD PICK: belief fetch failed', 'error');
             statsEl.textContent = `${myTeam.length} v ${oppTeam.length} (belief fetch failed)`;
           });
 
@@ -1715,7 +1865,7 @@ export default defineContentScript({
           lastKey = key;
         } else {
           hdrEl.textContent = 'Copilot — team preview';
-          bestEl.textContent = 'waiting for opponent preview…';
+          showStatusOverlay('LEAD PICK: waiting for opponent preview…', 'info');
           statsEl.textContent = `my team: ${myTeam.length}, opp team: ${oppTeam.length}`;
         }
         return;
@@ -1790,7 +1940,7 @@ export default defineContentScript({
       } catch (e: any) {
         console.error('[sc] translate error', e);
         hdrEl.textContent = 'Copilot — translate error';
-        bestEl.textContent = e.message || 'bad state';
+        showStatusOverlay(`Error: ${e.message || 'bad state'}`, 'error');
         lastKey = key;
       }
     }, POLL_MS);
