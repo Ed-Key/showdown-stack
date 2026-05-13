@@ -259,28 +259,31 @@ export interface TrendArrow {
  * the direction and magnitude over the last 3 entries.
  */
 export function computeTrendArrow(history: number[]): TrendArrow {
-  if (history.length < 2) {
-    return { direction: 'flat', arrow: '→', delta: 0, color: '#707070' };
-  }
+  const FLAT: TrendArrow = { direction: 'flat', arrow: '→', delta: 0, color: '#707070' };
+  if (!Array.isArray(history) || history.length < 2) return FLAT;
+  // Reject any NaN/Infinity anywhere in history — a single bad sample
+  // upstream shouldn't silently surface a misleading arrow.
+  if (!history.every((v) => Number.isFinite(v))) return FLAT;
 
-  // Look at last 3 turns of change (or fewer if history is short)
+  // Sample the most recent and the value 3 turns back (or fewer for short history).
   const lookback = Math.min(3, history.length - 1);
   const recent = history[history.length - 1];
   const past = history[history.length - 1 - lookback];
+  if (!Number.isFinite(recent) || !Number.isFinite(past)) return FLAT;
+
   const deltaPct = Math.round((recent - past) * 100);
 
-  // Collapsing: drop > 20pp over the window
+  // Thresholds are intentionally tighter than computeTrend's ±5pp:
+  // the HP-slot display benefits from being more reactive to small swings
+  // than the inline arrow elsewhere in the panel.
   if (deltaPct <= -20) {
     return { direction: 'collapsing', arrow: '⚠', delta: deltaPct, color: '#c8302a' };
   }
-  // Rising: gain >= 4pp
   if (deltaPct >= 4) {
     return { direction: 'rising', arrow: '↗', delta: deltaPct, color: '#1a7a2a' };
   }
-  // Falling: loss <= -4pp
   if (deltaPct <= -4) {
     return { direction: 'falling', arrow: '↘', delta: deltaPct, color: '#a02020' };
   }
-  // Otherwise flat
-  return { direction: 'flat', arrow: '→', delta: deltaPct, color: '#707070' };
+  return { ...FLAT, delta: deltaPct };
 }

@@ -343,4 +343,17 @@ describe('computeTrendArrow', () => {
     expect(r.delta).toBeGreaterThanOrEqual(10);
     expect(r.delta).toBeLessThanOrEqual(20);
   });
+
+  it('returns flat with delta 0 for NaN-containing history', () => {
+    const r = computeTrendArrow([0.40, NaN, 0.50, 0.55, 0.60, 0.65]);
+    expect(r.direction).toBe('flat');
+    expect(r.delta).toBe(0);
+  });
+
+  it('returns flat with delta 0 for non-array input', () => {
+    // @ts-expect-error — testing runtime guard against bad caller input
+    const r = computeTrendArrow(null);
+    expect(r.direction).toBe('flat');
+    expect(r.delta).toBe(0);
+  });
 });
