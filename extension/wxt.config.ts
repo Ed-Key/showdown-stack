@@ -6,8 +6,11 @@ export default defineConfig({
     description: 'Live MCTS advice panel for Pokémon Showdown battles',
     version: '0.2.0',
     host_permissions: [
-      'http://localhost:7267/*',
-      'http://127.0.0.1:7267/*',
+      'https://play.pokemonshowdown.com/*',
+      'http://localhost:7271/*',
+      'https://assets.tcgdex.net/*',
+      'https://fonts.googleapis.com/*',
+      'https://fonts.gstatic.com/*',
     ],
   },
 });
