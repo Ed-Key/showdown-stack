@@ -234,3 +234,53 @@ export function isDesperate(val: number, pimcSplit: boolean = false): boolean {
   if (pimcSplit) return false;
   return val < DESPERATE_THRESHOLD;
 }
+
+// ────────────────────────────────────────────────────────────────
+// computeTrendArrow — single API for the HP-slot trend display
+// Added 2026-05-12 for TCG dashboard redesign.
+// Returns the arrow glyph, delta in percentage points, and color hint.
+// ────────────────────────────────────────────────────────────────
+
+export type TrendDirection = 'rising' | 'falling' | 'flat' | 'collapsing';
+
+export interface TrendArrow {
+  direction: TrendDirection;
+  /** Unicode arrow glyph: ↗ rising · ↘ falling · → flat · ⚠ collapsing */
+  arrow: string;
+  /** Win% delta over last 3 turns, in percentage points (e.g. +8, -6, +0) */
+  delta: number;
+  /** CSS color hint */
+  color: string;
+}
+
+/**
+ * Compute the trend arrow + delta for the HP-slot display.
+ * Reads the last few entries of confidence history (0-1 scale) and reports
+ * the direction and magnitude over the last 3 entries.
+ */
+export function computeTrendArrow(history: number[]): TrendArrow {
+  if (history.length < 2) {
+    return { direction: 'flat', arrow: '→', delta: 0, color: '#707070' };
+  }
+
+  // Look at last 3 turns of change (or fewer if history is short)
+  const lookback = Math.min(3, history.length - 1);
+  const recent = history[history.length - 1];
+  const past = history[history.length - 1 - lookback];
+  const deltaPct = Math.round((recent - past) * 100);
+
+  // Collapsing: drop > 20pp over the window
+  if (deltaPct <= -20) {
+    return { direction: 'collapsing', arrow: '⚠', delta: deltaPct, color: '#c8302a' };
+  }
+  // Rising: gain >= 4pp
+  if (deltaPct >= 4) {
+    return { direction: 'rising', arrow: '↗', delta: deltaPct, color: '#1a7a2a' };
+  }
+  // Falling: loss <= -4pp
+  if (deltaPct <= -4) {
+    return { direction: 'falling', arrow: '↘', delta: deltaPct, color: '#a02020' };
+  }
+  // Otherwise flat
+  return { direction: 'flat', arrow: '→', delta: deltaPct, color: '#707070' };
+}

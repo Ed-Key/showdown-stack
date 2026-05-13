@@ -289,3 +289,58 @@ describe('integration — feed + trend across simulated turns', () => {
     expect(h.length).toBe(VAL_HISTORY_CAP);
   });
 });
+
+// ────────────────────────────────────────────────────────────────
+// computeTrendArrow tests (Task 4 — TCG dashboard HP-slot)
+// ────────────────────────────────────────────────────────────────
+
+import { computeTrendArrow } from '../../lib/val-trend';
+
+describe('computeTrendArrow', () => {
+  it('returns rising arrow with positive delta for rising history', () => {
+    // confidence rising from 0.50 → 0.65 over last 3 turns
+    const r = computeTrendArrow([0.40, 0.45, 0.50, 0.55, 0.60, 0.65]);
+    expect(r.direction).toBe('rising');
+    expect(r.arrow).toBe('↗');
+    expect(r.delta).toBeGreaterThan(0);
+  });
+
+  it('returns falling arrow with negative delta for falling history', () => {
+    const r = computeTrendArrow([0.80, 0.75, 0.70, 0.65, 0.60, 0.55]);
+    expect(r.direction).toBe('falling');
+    expect(r.arrow).toBe('↘');
+    expect(r.delta).toBeLessThan(0);
+  });
+
+  it('returns flat arrow with near-zero delta for stable history', () => {
+    const r = computeTrendArrow([0.50, 0.51, 0.49, 0.50, 0.51, 0.50]);
+    expect(r.direction).toBe('flat');
+    expect(r.arrow).toBe('→');
+  });
+
+  it('returns collapsing arrow for sharp drop >0.20', () => {
+    const r = computeTrendArrow([0.80, 0.78, 0.75, 0.70, 0.50, 0.45]);
+    expect(r.direction).toBe('collapsing');
+    expect(r.arrow).toBe('⚠');
+    expect(r.delta).toBeLessThan(-20);
+  });
+
+  it('handles short history (<3 entries) without crashing', () => {
+    const r = computeTrendArrow([0.50]);
+    expect(r.direction).toBe('flat');
+    expect(r.delta).toBe(0);
+  });
+
+  it('handles empty history without crashing', () => {
+    const r = computeTrendArrow([]);
+    expect(r.direction).toBe('flat');
+    expect(r.delta).toBe(0);
+  });
+
+  it('delta is in percentage points (0-100 scale, not 0-1)', () => {
+    // 0.50 → 0.65 = +15 percentage points, not +0.15
+    const r = computeTrendArrow([0.40, 0.45, 0.50, 0.55, 0.60, 0.65]);
+    expect(r.delta).toBeGreaterThanOrEqual(10);
+    expect(r.delta).toBeLessThanOrEqual(20);
+  });
+});
