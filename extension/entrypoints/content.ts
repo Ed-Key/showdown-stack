@@ -12,16 +12,11 @@ import {
   TYPE_CHART, DEFAULT_SC, STATUS,
 } from '../lib/translate';
 import { snapshotState, snapshotSide } from '../lib/snapshot';
-import { mountExpandableCard } from '../lib/tabs';
 import { fetchBeliefSnapshot, type BeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { detectConflict, type ConflictWarning } from '../lib/conflict';
-import { renderMatrix } from '../panels/matrix';
-import { renderThreats } from '../panels/threats';
 import { fetchExplanation } from '../lib/explainer';
-import { renderExplainer } from '../panels/explainer';
-import { renderPimcVoteBar } from '../panels/pimc-vote-bar';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
   renderSparkline, computeTrendArrow,
@@ -79,7 +74,6 @@ export default defineContentScript({
         <div class="sc-notes-header" title="Battle note (press N for per-turn notes)">📝 Battle note <span class="sc-notes-toggle">[show]</span></div>
         <div class="sc-notes-body" style="display:none"><textarea class="sc-battle-note" placeholder="Free-form notes for this battle..." spellcheck="false"></textarea></div>
       </div>
-      <div class="sc-cards"></div>
     `;
 
     const style = document.createElement('style');
@@ -98,20 +92,6 @@ export default defineContentScript({
         border-bottom: 1px solid #333;
         padding-bottom: 6px;
         margin-bottom: 6px;
-      }
-      #sc-panel .sc-cards .sc-card {
-        border-top: 1px solid #2a2a2a;
-      }
-      #sc-panel .sc-card-header {
-        cursor: pointer;
-        user-select: none;
-        font-size: 11px;
-        padding: 4px 0;
-        display: flex;
-        justify-content: space-between;
-      }
-      #sc-panel .sc-card-toggle {
-        color: #888;
       }
       #sc-panel .sc-conflict {
         background: #5a1f1f;
@@ -294,7 +274,6 @@ export default defineContentScript({
     const statsEl = panel.querySelector<HTMLDivElement>('.sc-stats')!;
     const pvEl = panel.querySelector<HTMLDivElement>('.sc-pv')!;
     const altsEl = panel.querySelector<HTMLDivElement>('.sc-alts')!;
-    const cardsRoot = panel.querySelector<HTMLDivElement>('.sc-cards')!;
     const notesHeaderEl = panel.querySelector<HTMLDivElement>('.sc-notes-header')!;
     const notesBodyEl = panel.querySelector<HTMLDivElement>('.sc-notes-body')!;
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
@@ -377,12 +356,12 @@ export default defineContentScript({
       };
     }
 
-    // ---- Damage matrix card --------------------------------------------
-    // Expandable card showing opp→us damage % per (attacker, defender) pair,
-    // computed via @smogon/calc with belief-driven move/item/spread choices.
-    // Refreshed on toggle-to-expand and on every successful decision render
-    // (only when expanded — avoids the calc cost when collapsed).
-    const matrixCard = mountExpandableCard(cardsRoot, 'matrix', '⚔ Damage matrix');
+    // ---- Damage matrix (data only — UI superseded by TCG card) ---------
+    // Computes opp→us damage % per (attacker, defender) pair, via
+    // @smogon/calc with belief-driven move/item/spread choices. The legacy
+    // expandable matrix card was removed in the TCG dashboard redesign;
+    // `lastMatrix` is still populated because the new threats panel +
+    // TCG card bottom strip + LLM explainer summary all read it.
     let lastMatrix: DamageMatrix | null = null;
     let lastBeliefSnapshot: BeliefSnapshot | null = null;
 
@@ -392,7 +371,6 @@ export default defineContentScript({
       const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
       if (!myTeam.length || !oppTeam.length) {
         lastMatrix = null;
-        renderMatrix(matrixCard.body, null);
         return;
       }
       const snap = await fetchBeliefSnapshot('http://localhost:7271', br.id);
@@ -409,36 +387,25 @@ export default defineContentScript({
         field: { weather: detectWeather(b) || '', terrain: detectTerrain(b) || '' },
         attackerSide: 'opp',
       });
-      renderMatrix(matrixCard.body, lastMatrix);
     }
 
-    // Refresh when user expands the card (avoids work when collapsed).
-    matrixCard.toggleBtn.addEventListener('click', () => {
-      if (matrixCard.isExpanded) {
-        const room = win.app?.curRoom;
-        if (room?.battle && room?.id) refreshMatrix(room.battle, room);
-      }
-    });
-
-    // ---- Threats card ---------------------------------------------------
+    // ---- Threats (data only — UI superseded by threats panel) ----------
     // Surfaces the highest-damage threats from opp's active mon (and bench)
-    // against your team, derived from the same DamageMatrix used by the
-    // matrix card. Reads `lastMatrix` directly — refreshThreats requires
-    // that refreshMatrix has already populated it.
-    const threatsCard = mountExpandableCard(cardsRoot, 'threats', '⚠ Threats');
+    // against your team, derived from the DamageMatrix above. Reads
+    // `lastMatrix` directly — refreshThreats requires refreshMatrix has
+    // already populated it. The threats panel renderer reads `lastThreats`
+    // on every engine update.
     let lastThreats: ThreatsReport | null = null;
 
     function refreshThreats(b: any): void {
       if (!b || !lastMatrix) {
         lastThreats = null;
-        renderThreats(threatsCard.body, null);
         return;
       }
       const myActive = b.mySide?.active?.[0];
       const oppActive = b.farSide?.active?.[0];
       if (!myActive || !oppActive) {
         lastThreats = null;
-        renderThreats(threatsCard.body, null);
         return;
       }
       const myTeam = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
@@ -450,37 +417,15 @@ export default defineContentScript({
         myTeam, oppTeam,
         threshold: { warn: 50, danger: 80 },
       });
-      renderThreats(threatsCard.body, lastThreats);
     }
 
-    // Refresh on toggle-to-expand. Threats reads lastMatrix; if it's not
-    // populated yet (matrix card never expanded), force a matrix refresh
-    // first and chain the threats compute on completion.
-    threatsCard.toggleBtn.addEventListener('click', () => {
-      if (threatsCard.isExpanded) {
-        const room = win.app?.curRoom;
-        if (room?.battle && room?.id) {
-          refreshMatrix(room.battle, room).then(() => refreshThreats(room.battle));
-        }
-      }
-    });
-
-    // ---- PIMC vote-bar card ---------------------------------------------
+    // ---- PIMC vote breakdown (data only — UI superseded by energy orbs) -
     // Per-hypothesis vote distribution from the PIMC proxy mode (only
     // populated when POKE_PROXY_PIMC_K > 0 and the engine emits
-    // `pimcBreakdown` on its `final` event). Renders one row per unique
-    // top_move with vote count, mean visit_share, and the opp_summary
-    // strings that produced each vote — surfaces consensus vs split
-    // decisions to the user.
-    const pimcCard = mountExpandableCard(cardsRoot, 'pimc', '🗳 PIMC votes');
+    // `pimcBreakdown` on its `final` event). Surfaces consensus vs split
+    // decisions via the pinned line + per-move energy orbs on the TCG card.
     let lastPimcBreakdown: any[] | null = null;
     let lastPimcBest: string | null = null;
-    renderPimcVoteBar(pimcCard.body, null, null);
-    pimcCard.toggleBtn.addEventListener('click', () => {
-      if (pimcCard.isExpanded) {
-        renderPimcVoteBar(pimcCard.body, lastPimcBreakdown, lastPimcBest);
-      }
-    });
 
     // ---- Engine-confidence trend tracker --------------------------------
     // Per-battle val history (most-recent last, capped at VAL_HISTORY_CAP).
@@ -494,13 +439,13 @@ export default defineContentScript({
     const valHistoryByBattle = new Map<string, number[]>();
     const lastTrackedTurnByBattle = new Map<string, number>();
 
-    // ---- Explainer (Why-this-turn-matters) card -------------------------
+    // ---- Explainer (data only — UI superseded by TCG flavor strip) -----
     // LLM-rendered explanation of the engine's recommendation in plain
     // English. Fired once per engine `final` event, with the matrix
     // top-cells summary so the LLM can spot conflicts (engine recommends
     // stay-in but matrix says we get OHKO'd, etc.). Cached on
-    // (battleId, turn, rqid) by lib/explainer.ts.
-    const explainerCard = mountExpandableCard(cardsRoot, 'explainer', '🧠 Why this turn matters');
+    // (battleId, turn, rqid) by lib/explainer.ts. Surfaced as a one-line
+    // flavor strip on the TCG card.
     let lastExplanation: string | null = null;
     let explainerLoading = false;
 
@@ -533,15 +478,6 @@ export default defineContentScript({
         };
       }
     }
-
-    // Re-render on toggle-to-expand. If a fetch is in flight and we have
-    // no text yet, show the loading state; otherwise show the cached text
-    // (or empty state if the previous fetch failed).
-    explainerCard.toggleBtn.addEventListener('click', () => {
-      if (explainerCard.isExpanded) {
-        renderExplainer(explainerCard.body, lastExplanation, explainerLoading && lastExplanation === null);
-      }
-    });
 
     // ---- Annotation feature ---------------------------------------------
     // Per-turn notes (keyboard 'N') + per-battle freeform notes (textarea).
@@ -1262,14 +1198,12 @@ export default defineContentScript({
     function updatePimcDisplay(u: any) {
       const breakdown = Array.isArray(u?.pimcBreakdown) ? u.pimcBreakdown : null;
       if (!breakdown || breakdown.length === 0) {
-        // Single-modal response → clear pinned line, leave card body in
-        // its empty state so user gets a clear "no PIMC" hint if they
-        // expand it.
+        // Single-modal response → clear pinned line and stored breakdown
+        // so the TCG card's energy orbs stop showing stale vote counts.
         lastPimcBreakdown = null;
         lastPimcBest = null;
         pimcPinnedEl.classList.remove('visible', 'split');
         pimcPinnedEl.textContent = '';
-        if (pimcCard.isExpanded) renderPimcVoteBar(pimcCard.body, null, null);
         return;
       }
       lastPimcBreakdown = breakdown;
@@ -1284,7 +1218,6 @@ export default defineContentScript({
         `${agree} of ${k} hypotheses agree on: <b>${escapePimcText(String(consensus))}</b>` +
         `<span class="sc-pimc-badge">PIMC: K=${k}</span>` +
         (split ? ' <span class="sc-pimc-split-tag">⚠ split</span>' : '');
-      if (pimcCard.isExpanded) renderPimcVoteBar(pimcCard.body, breakdown, lastPimcBest);
     }
 
     function escapePimcText(s: string): string {
@@ -1478,7 +1411,6 @@ export default defineContentScript({
         const br = room;
         if (b && br?.id) {
           explainerLoading = true;
-          if (explainerCard.isExpanded) renderExplainer(explainerCard.body, null, true);
           fetchExplanation({
             proxyUrl: 'http://localhost:7271',
             battleId: br.id,
@@ -1491,7 +1423,6 @@ export default defineContentScript({
           }).then(text => {
             lastExplanation = text;
             explainerLoading = false;
-            if (explainerCard.isExpanded) renderExplainer(explainerCard.body, text, false);
           });
         }
       }
@@ -1826,13 +1757,12 @@ export default defineContentScript({
             statsEl.textContent = `${myTeam.length} v ${oppTeam.length} (belief fetch failed)`;
           });
 
-          // Refresh the ⚔ matrix card so it tracks the new battle, not the
+          // Refresh the damage matrix so it tracks the new battle, not the
           // prior one (fixes the stale-from-previous-battle bug). Threats
           // refreshes after matrix completes (fire-and-forget chain) so it
-          // sees the new lastMatrix.
-          if (matrixCard.isExpanded || threatsCard.isExpanded) {
-            refreshMatrix(b, br).then(() => refreshThreats(b));
-          }
+          // sees the new lastMatrix — the new threats panel reads
+          // `lastThreats` on every engine update so we always refresh.
+          refreshMatrix(b, br).then(() => refreshThreats(b));
 
           lastKey = key;
         } else {
@@ -1906,9 +1836,10 @@ export default defineContentScript({
         console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
         requestAnalysis(payload, record);
         lastKey = key;
-        if (matrixCard.isExpanded || threatsCard.isExpanded) {
-          refreshMatrix(b, br).then(() => refreshThreats(b));
-        }
+        // Refresh damage matrix + threats on every decision: the new
+        // threats panel always reads `lastThreats` and the TCG card
+        // bottom strip surfaces the worst-case threat.
+        refreshMatrix(b, br).then(() => refreshThreats(b));
       } catch (e: any) {
         console.error('[sc] translate error', e);
         hdrEl.textContent = 'Copilot — translate error';
