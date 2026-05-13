@@ -1,7 +1,7 @@
 /**
  * Resolves a Pokémon species name (Showdown format) to its sprite URL
  * on play.pokemonshowdown.com. Uses /sprites/home/ unconditionally for
- * 100% coverage across Gens 1-9 including Mega/Gmax/Paradox/regional forms.
+ * coverage across Gens 1-9 including Mega/Gmax/Paradox/regional forms.
  *
  * Verified empirically against 67 species on 2026-05-12.
  * See docs/superpowers/specs/2026-05-12-tcg-dashboard-redesign-design.md §4.1
@@ -28,26 +28,27 @@ function toId(s: string): string {
 /**
  * Convert species name to its Pokémon HOME sprite URL.
  * @param name Showdown-format species name (e.g. "Iron Valiant", "Samurott-Hisui", "Ho-Oh")
- * @returns Full URL string ready for <img src>
+ * @returns Full URL string ready for <img src>, or empty string if name has no usable characters
  */
 export function speciesToSpriteURL(name: string): string {
-  // Step 1: strip non-alphanumerics except hyphens, lowercase.
-  let s = '';
-  for (const c of name) {
-    if (/[a-zA-Z0-9-]/.test(c)) s += c.toLowerCase();
-  }
+  // Strip non-alphanumerics (keeping hyphens), lowercase in one pass.
+  // Matches the codebase's idiomatic normalization (see lib/translate.ts norm()).
+  const s = name.toLowerCase().replace(/[^a-z0-9-]/g, '');
 
-  // Step 2: figure out the slug
+  // Empty after normalization → caller passed garbage. Return empty so the
+  // browser silently skips rendering rather than fetching a 404 placeholder.
+  if (s === '' || s === '-') return '';
+
   let slug: string;
   if (SINGLE_NAME_HYPHEN.has(s)) {
     // Single-name hyphenated → drop hyphen entirely
     slug = toId(s);
   } else if (s.includes('-')) {
-    // Multi-part form → keep first hyphen, fuse rest into a single segment
+    // Multi-part form → keep first hyphen, fuse rest into one segment
     const idx = s.indexOf('-');
     slug = s.slice(0, idx) + '-' + toId(s.slice(idx + 1));
   } else {
-    // Plain species name → simple toID
+    // Plain species name → simple toID (already lowercased above)
     slug = s;
   }
 

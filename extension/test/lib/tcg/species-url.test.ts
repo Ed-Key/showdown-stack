@@ -52,4 +52,18 @@ describe('speciesToSpriteURL', () => {
     it('Jangmo-o',    () => expect(speciesToSpriteURL('Jangmo-o')).toBe(`${BASE}/jangmoo.png`));
     it('Kommo-o',     () => expect(speciesToSpriteURL('Kommo-o')).toBe(`${BASE}/kommoo.png`));
   });
+
+  describe('edge cases', () => {
+    it('returns empty string for empty input', () => {
+      expect(speciesToSpriteURL('')).toBe('');
+    });
+
+    it('returns empty string for whitespace-only input', () => {
+      expect(speciesToSpriteURL('   ')).toBe('');
+    });
+
+    it('returns empty string for non-alphanumeric-only input', () => {
+      expect(speciesToSpriteURL('!@#$%')).toBe('');
+    });
+  });
 });
