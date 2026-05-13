@@ -1,0 +1,592 @@
+/*
+ * TCG Dashboard design system.
+ * Per spec 2026-05-12-tcg-dashboard-redesign-design.md §2.
+ *
+ * Typography is loaded externally — make sure content.ts imports Google Fonts:
+ *   Bowlby+One+SC | Public+Sans (400-900) | Spectral (italic) | JetBrains+Mono
+ */
+
+/* ───────── TYPE COLOR VARIABLES ─────────
+ * Each TCG type defines 5 color slots that the card chrome uses.
+ * Apply by setting class on the .sc-tcg-card root, e.g. <div class="sc-tcg-card t-water">
+ */
+.sc-tcg-card.t-water,
+.sc-tcg-card.t-ice {
+  --t-light: #cde4f2; --t-mid: #9bc8e0; --t-dark: #4a8fc8; --t-deep: #2a5a8a;
+  --t-accent: #0a1a30; --t-flavor: #e8f0f8;
+  --t-art-1: #2a5a8a; --t-art-2: #4a8fc8; --t-art-3: #6fb5e0; --t-art-4: #9ed0e8;
+}
+.sc-tcg-card.t-fire {
+  --t-light: #ffd8a8; --t-mid: #f29870; --t-dark: #d04020; --t-deep: #702010;
+  --t-accent: #3a0a04; --t-flavor: #fde8d8;
+  --t-art-1: #702010; --t-art-2: #d04020; --t-art-3: #f29870; --t-art-4: #ffb888;
+}
+.sc-tcg-card.t-grass {
+  --t-light: #c8e0c8; --t-mid: #88b888; --t-dark: #508050; --t-deep: #205020;
+  --t-accent: #0a2a0a; --t-flavor: #e0f0e0;
+  --t-art-1: #205020; --t-art-2: #508050; --t-art-3: #88b888; --t-art-4: #b8d8b8;
+}
+.sc-tcg-card.t-lightning {
+  --t-light: #fff5b0; --t-mid: #f8d030; --t-dark: #c89010; --t-deep: #806010;
+  --t-accent: #3a2800; --t-flavor: #fff5d0;
+  --t-art-1: #806010; --t-art-2: #c89010; --t-art-3: #f8d030; --t-art-4: #ffe070;
+}
+.sc-tcg-card.t-psychic {
+  --t-light: #e8d0f0; --t-mid: #c898d8; --t-dark: #8050a0; --t-deep: #502878;
+  --t-accent: #28104a; --t-flavor: #f0d8f8;
+  --t-art-1: #502878; --t-art-2: #8050a0; --t-art-3: #c898d8; --t-art-4: #e0c0f0;
+}
+.sc-tcg-card.t-fighting {
+  --t-light: #e8c8a8; --t-mid: #c89870; --t-dark: #a86040; --t-deep: #602810;
+  --t-accent: #2a0a04; --t-flavor: #f0d8b8;
+  --t-art-1: #602810; --t-art-2: #a86040; --t-art-3: #c88858; --t-art-4: #e0b888;
+}
+.sc-tcg-card.t-darkness {
+  --t-light: #a8a0b0; --t-mid: #6a6280; --t-dark: #383848; --t-deep: #100818;
+  --t-accent: #ffffff; --t-flavor: #c8c0d0;
+  --t-art-1: #100818; --t-art-2: #383848; --t-art-3: #6a6280; --t-art-4: #a098b0;
+}
+.sc-tcg-card.t-metal {
+  --t-light: #d8d8e0; --t-mid: #9098a8; --t-dark: #585868; --t-deep: #383848;
+  --t-accent: #ffffff; --t-flavor: #e8e8ee;
+  --t-art-1: #383848; --t-art-2: #585868; --t-art-3: #9098a8; --t-art-4: #c0c0d0;
+}
+.sc-tcg-card.t-fairy {
+  --t-light: #f5d8e8; --t-mid: #ecb0d0; --t-dark: #c870a0; --t-deep: #8a3a6a;
+  --t-accent: #3a1028; --t-flavor: #f8e8f0;
+  --t-art-1: #8a3a6a; --t-art-2: #c870a0; --t-art-3: #e090c0; --t-art-4: #f0b8d8;
+}
+.sc-tcg-card.t-colorless {
+  --t-light: #e8e8ec; --t-mid: #b8b8c0; --t-dark: #808088; --t-deep: #404048;
+  --t-accent: #ffffff; --t-flavor: #f0f0f2;
+  --t-art-1: #404048; --t-art-2: #808088; --t-art-3: #b8b8c0; --t-art-4: #d8d8e0;
+}
+
+/* ───────── ROOT PANEL ───────── */
+.sc-panel-v2 {
+  width: 360px;
+  background: #0a0a14;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.1);
+  overflow: hidden;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 999999;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+/* ───────── HEADER ───────── */
+.sc-header-v2 {
+  background: linear-gradient(180deg, #14141c 0%, #0a0a14 100%);
+  padding: 11px 14px;
+  display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid #2a2a32;
+}
+.sc-header-v2 .logo { width: 26px; height: 26px; flex-shrink: 0; }
+.sc-header-v2 .title {
+  flex: 1;
+  font-family: 'Bowlby One SC', sans-serif;
+  color: #f5d878; font-size: 13px; letter-spacing: 0.14em; line-height: 1;
+}
+.sc-header-v2 .title .format {
+  color: #888; font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; letter-spacing: 0.1em; margin-top: 3px;
+  font-family: 'JetBrains Mono', monospace; font-weight: 400;
+}
+.sc-header-v2 .live {
+  display: flex; align-items: center; gap: 5px;
+  background: rgba(110,196,110,0.15);
+  border: 1px solid rgba(110,196,110,0.4);
+  padding: 3px 8px; border-radius: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; letter-spacing: 0.16em;
+  color: #6ec46e; font-weight: 700;
+}
+.sc-header-v2 .live .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #6ec46e; box-shadow: 0 0 6px #6ec46e;
+  animation: sc-pulse-live 1.4s ease-in-out infinite;
+}
+@keyframes sc-pulse-live { 50% { opacity: 0.4; } }
+.sc-header-v2 .turn {
+  background: rgba(245,216,120,0.12);
+  border: 1px solid rgba(245,216,120,0.4);
+  padding: 3px 8px; border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: #f5d878;
+  font-weight: 700; letter-spacing: 0.06em;
+}
+
+/* ───────── CONFLICT BANNER ───────── */
+.sc-conflict-banner {
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(200,48,42,0.15) 0, rgba(200,48,42,0.15) 8px,
+      transparent 8px, transparent 16px),
+    linear-gradient(90deg, #6a1018, #8a1820);
+  border-top: 1px solid #c8302a;
+  border-bottom: 1px solid #c8302a;
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px;
+}
+.sc-conflict-banner.hidden { display: none; }
+.sc-conflict-banner .icon {
+  width: 28px; height: 28px;
+  background: #c8302a;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 900; font-size: 16px;
+  flex-shrink: 0;
+  animation: sc-pulse-red 1s ease-in-out infinite;
+}
+@keyframes sc-pulse-red { 50% { box-shadow: 0 0 0 4px rgba(200,48,42,0.4); } }
+.sc-conflict-banner .text {
+  flex: 1; color: #fff;
+  font-family: 'Spectral', serif;
+  font-style: italic; font-size: 12.5px; line-height: 1.35;
+}
+.sc-conflict-banner .text strong {
+  font-family: 'JetBrains Mono', monospace;
+  font-style: normal; font-weight: 700;
+  letter-spacing: 0.1em; font-size: 10px;
+  color: #ffe898; display: block; margin-bottom: 2px;
+}
+
+/* ───────── TCG CARD ───────── */
+.sc-tcg-wrap {
+  padding: 14px;
+  background: linear-gradient(180deg, #0a0a14 0%, #050510 100%);
+}
+.sc-tcg-card {
+  padding: 6px;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, #b8b8b8 0%, #f5f5f5 7%, #a8a8a8 14%, #e8e8e8 22%,
+      #c0c0c0 35%, #f8f8f8 45%, #b0b0b0 55%, #ededed 65%,
+      #c8c8c8 78%, #f0f0f0 88%, #a8a8a8 100%);
+  box-shadow:
+    0 8px 20px rgba(0,0,0,0.55),
+    inset 0 0 0 1px rgba(255,255,255,0.4);
+  position: relative;
+}
+.sc-tcg-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 12px;
+  background: linear-gradient(115deg,
+    transparent 30%, rgba(255,200,255,0.1) 45%,
+    rgba(200,255,255,0.1) 55%, rgba(255,255,200,0.1) 65%, transparent 80%);
+  pointer-events: none;
+  z-index: 2;
+}
+.sc-tcg-card .inner {
+  background: linear-gradient(180deg, var(--t-light) 0%, var(--t-mid) 100%);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+/* CARD TOP */
+.sc-tcg-card .top {
+  display: flex; align-items: center;
+  padding: 9px 11px 7px; gap: 9px;
+}
+.sc-tcg-card .poke-mini {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fff, #c0c0c0 60%, #888 100%);
+  border: 2px solid #fff;
+  flex-shrink: 0; overflow: hidden;
+  box-shadow: inset 0 -2px 4px rgba(0,0,0,0.15);
+  display: flex; align-items: center; justify-content: center;
+}
+.sc-tcg-card .poke-mini img { width: 32px; height: 32px; object-fit: contain; }
+.sc-tcg-card .name-wrap { flex: 1; min-width: 0; }
+.sc-tcg-card .stage-label {
+  font-size: 8px; font-weight: 800;
+  letter-spacing: 0.16em;
+  color: var(--t-accent);
+  opacity: 0.7; text-transform: uppercase;
+}
+.sc-tcg-card .card-name {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 18px;
+  color: var(--t-accent);
+  line-height: 1.05; margin-top: 1px;
+}
+.sc-tcg-card .trend-slot {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,0.25);
+  border: 1px solid rgba(0,0,0,0.15);
+  padding: 4px 8px 4px 6px;
+  border-radius: 16px;
+  box-shadow: inset 0 -1px 2px rgba(0,0,0,0.08);
+}
+.sc-tcg-card .trend-arrow {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 20px; line-height: 1; letter-spacing: -0.04em;
+  text-shadow: 1px 1px 0 rgba(255,255,255,0.4);
+}
+.sc-tcg-card .trend-delta {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 16px; line-height: 1;
+  letter-spacing: -0.02em;
+}
+.sc-tcg-card .type-pip {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.7), var(--t-dark) 60%, var(--t-deep) 100%);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; margin-left: 3px;
+  box-shadow: inset 0 -1px 2px rgba(0,0,0,0.3);
+}
+
+/* ART FRAME */
+.sc-tcg-card .art-outer {
+  margin: 0 9px;
+  padding: 2px;
+  background: linear-gradient(135deg, #b8b8b8 0%, #f0f0f0 30%, #a0a0a0 50%, #e8e8e8 75%, #b0b0b0 100%);
+}
+.sc-tcg-card .art {
+  background:
+    radial-gradient(ellipse at 50% 70%, rgba(255,255,255,0.4), transparent 55%),
+    linear-gradient(180deg, var(--t-art-1) 0%, var(--t-art-2) 30%, var(--t-art-3) 70%, var(--t-art-4) 100%);
+  height: 190px; position: relative; overflow: hidden;
+}
+.sc-tcg-card .flair {
+  position: absolute;
+  color: rgba(255,255,255,0.85);
+  text-shadow: 0 0 4px rgba(255,255,255,0.6);
+  animation: sc-drift 6s ease-in-out infinite;
+  z-index: 1;
+}
+@keyframes sc-drift { 50% { transform: translateY(-8px) rotate(15deg); opacity: 1; } }
+.sc-tcg-card .sprite-stage {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2;
+}
+.sc-tcg-card .sprite-stage img {
+  width: 130px; height: 130px;
+  object-fit: contain;
+  filter: drop-shadow(2px 4px 6px rgba(0,0,0,0.5));
+}
+.sc-tcg-card .art-tags {
+  position: absolute; top: 7px; left: 7px; right: 7px;
+  display: flex; justify-content: space-between; z-index: 3;
+}
+.sc-tcg-card .art-tag {
+  font-size: 8.5px; font-weight: 800; color: #fff;
+  letter-spacing: 0.14em;
+  background: rgba(0,0,0,0.55); padding: 2px 7px; border-radius: 2px;
+  backdrop-filter: blur(2px);
+}
+.sc-tcg-card .spark-strip {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,0.7) 70%);
+  padding: 12px 10px 5px; z-index: 3;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 8px;
+}
+.sc-tcg-card .spark-strip svg { flex: 1; height: 22px; }
+.sc-tcg-card .big-conf {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 26px; color: #fff; line-height: 0.9;
+  text-shadow: 2px 2px 0 rgba(0,0,0,0.6);
+}
+.sc-tcg-card .big-conf .pct { font-size: 11px; }
+
+/* FLAVOR STRIP */
+.sc-tcg-card .flavor {
+  background: var(--t-flavor);
+  padding: 5px 11px;
+  font-family: 'Spectral', serif;
+  font-size: 11px; font-style: italic;
+  color: var(--t-accent);
+  line-height: 1.4;
+  margin: 0 9px;
+  border-top: 1px solid rgba(0,0,0,0.15);
+  border-bottom: 1px solid rgba(0,0,0,0.15);
+}
+.sc-tcg-card .flavor .ai-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-style: normal; font-weight: 700;
+  font-size: 8px; letter-spacing: 0.18em;
+  color: rgba(10,26,48,0.5);
+  margin-right: 4px;
+}
+
+/* MOVES */
+.sc-tcg-card .moves {
+  background: linear-gradient(180deg, var(--t-mid) 0%, var(--t-dark) 100%);
+  padding: 6px 11px;
+}
+.sc-tcg-card .move {
+  display: flex; align-items: center;
+  padding: 6px 0; gap: 8px;
+  border-bottom: 1px solid rgba(0,0,0,0.15);
+}
+.sc-tcg-card .move:last-child { border-bottom: none; }
+.sc-tcg-card .move.rec {
+  background: linear-gradient(90deg, rgba(255,255,255,0.4), transparent);
+  border-radius: 4px;
+  padding-left: 5px;
+  margin: 0 -5px 2px;
+}
+.sc-tcg-card .energy-row {
+  display: flex; gap: 2px;
+  min-width: 96px;
+  flex-shrink: 0;
+}
+.sc-tcg-card .energy {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background-size: 220% auto;
+  background-position: center 68%;
+  background-repeat: no-repeat;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4), inset 0 -1px 2px rgba(0,0,0,0.2);
+}
+.sc-tcg-card .energy.empty {
+  background: rgba(255,255,255,0.25);
+  border: 1.5px solid rgba(0,0,0,0.2);
+}
+.sc-tcg-card .move-body { flex: 1; min-width: 0; }
+.sc-tcg-card .move-top { display: flex; align-items: center; gap: 5px; }
+.sc-tcg-card .move-name {
+  font-size: 13px; font-weight: 800;
+  color: var(--t-accent);
+  line-height: 1.1;
+}
+.sc-tcg-card .rec-star {
+  color: #f8d038; font-size: 11px;
+  text-shadow: 1px 1px 0 rgba(0,0,0,0.3);
+}
+.sc-tcg-card .move-desc {
+  font-size: 9px;
+  color: rgba(0,0,0,0.6);
+  font-style: italic;
+  line-height: 1.2; margin-top: 1px;
+}
+.sc-tcg-card .move-dmg {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 18px;
+  color: var(--t-accent);
+}
+.sc-tcg-card .cat {
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 7.5px; font-weight: 800; margin-left: 3px;
+}
+.sc-tcg-card .cat.p { background: #c84040; color: #fff; }
+.sc-tcg-card .cat.s { background: #4080c8; color: #fff; }
+.sc-tcg-card .cat.t { background: #888; color: #fff; }
+
+/* BOTTOM STRIP */
+.sc-tcg-card .bottom {
+  background: linear-gradient(180deg, var(--t-dark) 0%, var(--t-deep) 100%);
+  padding: 5px 11px;
+  display: flex; justify-content: space-between;
+  border-top: 1px solid rgba(0,0,0,0.2);
+}
+.sc-tcg-card .bottom-cell {
+  display: flex; flex-direction: column;
+  align-items: center; flex: 1;
+}
+.sc-tcg-card .bottom-label {
+  font-size: 7.5px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.7);
+  font-weight: 800; letter-spacing: 0.1em;
+}
+.sc-tcg-card .bottom-val {
+  font-size: 10.5px; color: #fff; font-weight: 800;
+}
+.sc-tcg-card .footer {
+  padding: 4px 11px 6px;
+  font-size: 8px;
+  color: rgba(255,255,255,0.7);
+  background: var(--t-deep);
+  display: flex; justify-content: space-between;
+  letter-spacing: 0.06em; font-weight: 700;
+}
+
+/* ───────── THREATS PANEL (TRAINER CARD) ───────── */
+.sc-trainer-card {
+  margin: 14px;
+  padding: 4px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #d0d0d0 0%, #f0f0f0 30%, #b0b0b0 60%, #e0e0e0 100%);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.3);
+}
+.sc-trainer-card .trainer-inner {
+  background: linear-gradient(180deg, #f0e2a0 0%, #d4b860 100%);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.sc-trainer-card .trainer-header {
+  background: linear-gradient(90deg, #8a6010, #b88830);
+  padding: 5px 11px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid rgba(0,0,0,0.3);
+}
+.sc-trainer-card .trainer-header .t-name {
+  font-family: 'Bowlby One SC', sans-serif;
+  color: #ffe898; font-size: 11px;
+  letter-spacing: 0.04em;
+  text-shadow: 1px 1px 0 rgba(0,0,0,0.4);
+}
+.sc-trainer-card .trainer-header .t-type {
+  font-family: 'JetBrains Mono', monospace;
+  color: #ffe898; font-size: 8px;
+  letter-spacing: 0.18em;
+  background: rgba(0,0,0,0.35);
+  padding: 2px 5px; border-radius: 2px;
+}
+.sc-trainer-card .trainer-body { padding: 6px 11px 8px; }
+.sc-trainer-card .section-label {
+  font-family: 'JetBrains Mono', monospace;
+  color: rgba(42,26,10,0.6);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  margin: 2px 0 4px;
+}
+.sc-trainer-card .threat-row {
+  display: flex; align-items: center;
+  padding: 4px 0; gap: 7px;
+  border-bottom: 1px dotted rgba(0,0,0,0.15);
+}
+.sc-trainer-card .threat-row:last-child { border-bottom: none; }
+.sc-trainer-card .threat-icon { font-size: 13px; width: 18px; text-align: center; }
+.sc-trainer-card .threat-icon.ohko { color: #6a0a08; }
+.sc-trainer-card .threat-icon.warn { color: #a04020; }
+.sc-trainer-card .threat-move {
+  flex: 1;
+  font-family: 'Bowlby One SC', sans-serif;
+  color: #2a1a0a; font-size: 12px;
+}
+.sc-trainer-card .threat-from {
+  font-family: 'JetBrains Mono', monospace;
+  color: rgba(42,26,10,0.65);
+  font-size: 9px; letter-spacing: 0.04em;
+}
+.sc-trainer-card .threat-from img {
+  width: 16px; height: 16px;
+  vertical-align: middle; margin-right: 3px;
+  object-fit: contain;
+}
+.sc-trainer-card .threat-dmg {
+  font-family: 'Bowlby One SC', sans-serif;
+  color: #2a1a0a; font-size: 14px;
+  min-width: 42px; text-align: right;
+}
+.sc-trainer-card .threat-dmg.ohko { color: #6a0a08; }
+.sc-trainer-card .seen-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px; letter-spacing: 0.08em;
+  padding: 1px 5px; border-radius: 2px;
+  margin-right: 4px;
+}
+.sc-trainer-card .seen-tag.seen { background: #2a6a2a; color: #c8f0c8; }
+.sc-trainer-card .seen-tag.chaos { background: #6a4a8a; color: #e0c8f0; }
+
+/* ───────── PV CHAIN ───────── */
+.sc-pv-card {
+  margin: 0 14px 14px;
+  padding: 4px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #d0d0d0 0%, #f0f0f0 30%, #b0b0b0 60%, #e0e0e0 100%);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.3);
+}
+.sc-pv-card .pv-inner {
+  background: linear-gradient(180deg, #1a1a2a 0%, #2a2a3a 100%);
+  border-radius: 5px;
+  padding: 8px 11px;
+}
+.sc-pv-card .pv-header {
+  display: flex; justify-content: space-between;
+  align-items: center; margin-bottom: 7px;
+}
+.sc-pv-card .pv-header .pv-label {
+  font-family: 'JetBrains Mono', monospace;
+  color: #f5d878; font-size: 9.5px;
+  letter-spacing: 0.18em;
+}
+.sc-pv-card .pv-header .pv-meta {
+  font-family: 'JetBrains Mono', monospace;
+  color: #888; font-size: 9px;
+  letter-spacing: 0.06em;
+}
+.sc-pv-card .pv-chain {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  align-items: center;
+}
+.sc-pv-card .pv-step {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  padding: 3px 7px; border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; color: #fff;
+  letter-spacing: 0.04em; font-weight: 700;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.sc-pv-card .pv-step.me { border-left: 3px solid #4a8fc8; }
+.sc-pv-card .pv-step.opp { border-left: 3px solid #c84040; }
+.sc-pv-card .pv-arrow { color: #888; font-size: 11px; }
+
+/* ───────── NOTES + FOOTER ───────── */
+.sc-notes-v2 {
+  margin: 0 14px 14px;
+  background: rgba(245,216,120,0.06);
+  border: 1px solid rgba(245,216,120,0.25);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.sc-notes-v2 .notes-label {
+  font-family: 'JetBrains Mono', monospace;
+  color: #f5d878;
+  font-size: 9px; letter-spacing: 0.18em;
+  margin-bottom: 4px;
+  display: flex; justify-content: space-between;
+}
+.sc-notes-v2 .kbd {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(245,216,120,0.15);
+  border: 1px solid rgba(245,216,120,0.4);
+  padding: 1px 5px; border-radius: 3px;
+  color: #f5d878; font-size: 8px;
+}
+.sc-notes-v2 textarea {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #fff;
+  padding: 6px 8px;
+  font-family: 'Spectral', serif;
+  font-size: 12px; font-style: italic;
+  border-radius: 4px; resize: vertical;
+  min-height: 40px; outline: none;
+}
+.sc-notes-v2 textarea::placeholder { color: rgba(255,255,255,0.3); }
+
+.sc-bottom-bar-v2 {
+  background: linear-gradient(180deg, #0a0a14 0%, #050510 100%);
+  padding: 8px 14px;
+  display: flex; justify-content: space-between; align-items: center;
+  border-top: 1px solid #1a1a24;
+}
+.sc-bottom-bar-v2 .info {
+  font-family: 'JetBrains Mono', monospace;
+  color: #555; font-size: 8.5px;
+  letter-spacing: 0.08em;
+}
+.sc-bottom-bar-v2 .shortcuts { display: flex; gap: 4px; }
+.sc-bottom-bar-v2 .kbd-bar {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 2px 5px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: #888;
+  border-radius: 3px;
+}
