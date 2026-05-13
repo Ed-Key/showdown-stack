@@ -152,6 +152,55 @@ export function buildMyPokemon(p: any, activeMoves: any[] | null = null, win: an
   };
 }
 
+/**
+ * Build the transformedInto payload for opp Pokemon currently transformed
+ * via Imposter or the Transform move. Mirrors poke-env's Pokemon.transform()
+ * field set; the proxy's _apply_transform_if_present helper applies it.
+ *
+ * Returns null when this Pokemon isn't transformed.
+ *
+ * Tera-aware: if the transforming mon (e.g. Ditto) has Tera'd to its OWN
+ * preview Tera type, that single type wins. This is the critical Imposter
+ * Ditto + Tera Ghost case — Ditto stays Bug/Fire from copying Volcarona
+ * UNTIL it Teras, at which point it becomes pure Ghost (sim/pokemon.ts
+ * confirms: Ditto Teras to its own type, not the target's).
+ */
+function buildTransformPayload(p: any, win: any): Record<string, any> | null {
+  // Showdown's client stores transform as a volatile. Shape varies across
+  // versions: older array [name, sourcePokemon], newer object {pokemon}.
+  // Probe defensively and degrade to null if neither shape resolves.
+  const xform = p.volatiles?.transform;
+  if (!xform) return null;
+  const target = Array.isArray(xform)
+    ? xform[1]
+    : (xform.pokemon || xform.target);
+  if (!target) return null;
+
+  const teraTypes = p.terastallized && p.teraType ? [p.teraType] : null;
+  const baseTypes =
+    target.types || resolveTypes(target.speciesForme || target.species, win);
+
+  const moveSlots: any[] = target.moveSlots || target.moves || [];
+  const moves: string[] = moveSlots
+    .map((m: any) =>
+      norm(typeof m === 'string' ? m : (m?.id || m?.move || ''))
+    )
+    .filter((s: string) => s && s !== 'struggle' && s !== 'none')
+    .slice(0, 4);
+
+  return {
+    species: norm(target.speciesForme || target.species),
+    types: teraTypes ?? baseTypes,
+    ability: norm(target.ability || target.baseAbility || 'none'),
+    attack: target.stats?.atk ?? 0,
+    defense: target.stats?.def ?? 0,
+    specialAttack: target.stats?.spa ?? 0,
+    specialDefense: target.stats?.spd ?? 0,
+    speed: target.stats?.spe ?? 0,
+    moves,
+  };
+}
+
 export function buildOppPokemon(p: any, win: any) {
   const speciesRaw = p.speciesForme || p.species?.name || p.species;
   const level = p.level || 100;
@@ -162,6 +211,7 @@ export function buildOppPokemon(p: any, win: any) {
   const computed = computeOpponentStats(speciesRaw, level, win);
   const maxhp = computed.maxhp;
   const hp = Math.max(0, Math.round(hpPct * maxhp / 100));
+  const transformedInto = buildTransformPayload(p, win);
   return {
     species: norm(speciesRaw),
     level,
@@ -181,6 +231,7 @@ export function buildOppPokemon(p: any, win: any) {
     moves: padMovesWithPriors(revealed, speciesRaw),
     terastallized: !!p.terastallized,
     teraType: '',
+    ...(transformedInto ? { transformedInto } : {}),
   };
 }
 
