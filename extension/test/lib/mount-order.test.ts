@@ -1,27 +1,20 @@
 /** @vitest-environment jsdom */
 /**
  * Smoke test for the renderUpdate() panel-mount sequence in
- * entrypoints/content.ts. Locks in the current DOM order so that the Phase 4
- * `mountPanels()` extraction (or any other refactor that touches the four
- * insertBefore / replaceWith blocks) can't silently rearrange the visual
- * hierarchy.
+ * entrypoints/content.ts. Locks in the current DOM order so future refactors
+ * can't silently rearrange the visual hierarchy.
  *
- * Source-of-truth references in content.ts:
- *   - L78-90:    initial panel HTML with .sc-pinned scaffolding
- *   - L1208-1231 TCG card mount (replaces .sc-best on first call)
- *   - L1238-1257 threats panel mount (inserted ABOVE .sc-tcg-card)
- *   - L1263-1286 PV chain mount (after threats, before TCG card)
- *   - L951-978   conflict banner mount (before TCG card)
- *
- * The mount helpers below mirror that logic verbatim. When Phase 4 extracts
- * a shared `mountOrReplace()` into panels/_mount.ts, replace these mirrors
- * with imports; the test cases themselves should still hold.
+ * Originally these tests mirrored the inline mount logic in content.ts.
+ * Phase 4 extracted that logic into `lib/panel-mount.ts:mountOrReplace`, so
+ * the helpers below now drive the real production helper with the same
+ * configs content.ts uses — single source of truth for the mount strategy.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderTcgCard, type TcgCardProps } from '../../panels/tcg-card';
 import { renderThreatsPanel } from '../../panels/threats-panel';
 import { renderPvChain } from '../../panels/pv-chain';
 import { renderConflictBanner } from '../../panels/conflict-banner';
+import { mountOrReplace } from '../../lib/panel-mount';
 
 const TCG_FIXTURE: TcgCardProps = {
   activeType: 'Fairy',
@@ -64,53 +57,43 @@ function buildPanelFixture(): HTMLDivElement {
   return panel;
 }
 
-// ---- Mount helpers (mirror content.ts) -----------------------------------
+// ---- Mount helpers (call the real production helper) --------------------
+// Each helper passes the same MountOptions config that content.ts uses, so
+// the test drives the live mount strategy end-to-end.
 
 function mountTcgCard(panel: HTMLElement, card: HTMLElement) {
-  // content.ts:1222-1230
-  const existingCard = panel.querySelector('.sc-tcg-card');
-  const oldBest = panel.querySelector('.sc-best');
-  if (existingCard) existingCard.replaceWith(card);
-  else if (oldBest) oldBest.replaceWith(card);
-  else panel.appendChild(card);
+  mountOrReplace(panel, {
+    newEl: card,
+    replaceTargets: ['.sc-tcg-card', '.sc-best'],
+  });
 }
 
 function mountThreats(panel: HTMLElement, threats: HTMLElement) {
-  // content.ts:1244-1255
-  const tcgCard = panel.querySelector('.sc-tcg-card');
-  const oldThreats = panel.querySelector('.sc-trainer-card');
-  if (oldThreats) oldThreats.replaceWith(threats);
-  else if (tcgCard && tcgCard.parentElement) tcgCard.parentElement.insertBefore(threats, tcgCard);
-  else panel.appendChild(threats);
+  mountOrReplace(panel, {
+    newEl: threats,
+    replaceTargets: ['.sc-trainer-card'],
+    anchors: [{ selector: '.sc-tcg-card', position: 'before' }],
+  });
 }
 
 function mountPv(panel: HTMLElement, pv: HTMLElement) {
-  // content.ts:1275-1283
-  const oldPv = panel.querySelector('.sc-pv-card');
-  const threatsEl = panel.querySelector('.sc-trainer-card');
-  if (oldPv) oldPv.replaceWith(pv);
-  else if (threatsEl && threatsEl.parentElement) threatsEl.parentElement.insertBefore(pv, threatsEl.nextSibling);
-  else panel.appendChild(pv);
+  mountOrReplace(panel, {
+    newEl: pv,
+    replaceTargets: ['.sc-pv-card'],
+    anchors: [{ selector: '.sc-trainer-card', position: 'after' }],
+  });
 }
 
 function mountConflict(panel: HTMLElement, banner: HTMLElement) {
-  // content.ts:960-977
-  const oldBanner = panel.querySelector('.sc-conflict-banner');
-  if (oldBanner) {
-    oldBanner.replaceWith(banner);
-    return;
-  }
-  const overlay = panel.querySelector('.sc-status-overlay');
-  if (overlay && overlay.parentElement) {
-    overlay.parentElement.insertBefore(banner, overlay);
-  } else {
-    const card = panel.querySelector('.sc-tcg-card');
-    if (card && card.parentElement) {
-      card.parentElement.insertBefore(banner, card);
-    } else {
-      panel.insertBefore(banner, panel.firstChild);
-    }
-  }
+  mountOrReplace(panel, {
+    newEl: banner,
+    replaceTargets: ['.sc-conflict-banner'],
+    anchors: [
+      { selector: '.sc-status-overlay', position: 'before' },
+      { selector: '.sc-tcg-card', position: 'before' },
+    ],
+    fallback: (root, el) => root.insertBefore(el, root.firstChild),
+  });
 }
 
 function panelOrder(panel: HTMLElement): string[] {

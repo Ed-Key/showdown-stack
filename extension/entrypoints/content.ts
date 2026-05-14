@@ -24,6 +24,7 @@ import { getMoveType, getPokemonPrimaryType, isSwitchOption } from '../lib/showd
 import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
 import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
 import { renderPvChain, type PvStep } from '../panels/pv-chain';
+import { mountOrReplace } from '../lib/panel-mount';
 import { escapeHtml } from '../panels/_shared';
 import {
   PROXY_BASE_URL, ENGINE_STREAM_URL, PROXY_ANNOTATION_URL, PROXY_POSTMORTEM_URL,
@@ -954,25 +955,19 @@ export default defineContentScript({
         ? { severity: mapConflictSeverity(c.level), reason: c.message }
         : null;
       const newBanner = renderConflictBanner(conflictProps);
-      const oldBanner = panel.querySelector('.sc-conflict-banner');
-      if (oldBanner) {
-        oldBanner.replaceWith(newBanner);
-      } else {
-        // Insert above the status overlay if present, else above the TCG
-        // card. Both live inside .sc-pinned so the banner stays attached
-        // to the recommendation cluster.
-        const overlay = panel.querySelector('.sc-status-overlay');
-        if (overlay && overlay.parentElement) {
-          overlay.parentElement.insertBefore(newBanner, overlay);
-        } else {
-          const card = panel.querySelector('.sc-tcg-card');
-          if (card && card.parentElement) {
-            card.parentElement.insertBefore(newBanner, card);
-          } else {
-            panel.insertBefore(newBanner, panel.firstChild);
-          }
-        }
-      }
+      // Insert above the status overlay if present, else above the TCG
+      // card. Both live inside .sc-pinned so the banner stays attached
+      // to the recommendation cluster. If neither exists yet, prepend to
+      // the panel itself (banner stays the topmost child).
+      mountOrReplace(panel, {
+        newEl: newBanner,
+        replaceTargets: ['.sc-conflict-banner'],
+        anchors: [
+          { selector: '.sc-status-overlay', position: 'before' },
+          { selector: '.sc-tcg-card', position: 'before' },
+        ],
+        fallback: (root, el) => root.insertBefore(el, root.firstChild),
+      });
     }
 
     // Detect whether the engine's bestMove string is a switch (species name) or
@@ -1216,15 +1211,13 @@ export default defineContentScript({
           lastThreats ?? null,
         );
         const newCard = renderTcgCard(tcgProps);
-        const existingCard = panel.querySelector('.sc-tcg-card');
-        const oldBest = panel.querySelector('.sc-best');
-        if (existingCard) {
-          existingCard.replaceWith(newCard);
-        } else if (oldBest) {
-          oldBest.replaceWith(newCard);
-        } else {
-          panel.appendChild(newCard);
-        }
+        // .sc-best is the legacy initial placeholder in the panel HTML;
+        // on first mount the card replaces it. After that .sc-tcg-card
+        // exists and gets swapped in place.
+        mountOrReplace(panel, {
+          newEl: newCard,
+          replaceTargets: ['.sc-tcg-card', '.sc-best'],
+        });
       }
 
       // ---- Threats panel (Task 11) ---------------------------------------
@@ -1233,23 +1226,19 @@ export default defineContentScript({
       // Mounted directly after the TCG card inside .sc-pinned so the user
       // sees the worst-case opp moves immediately under the recommendation.
       {
-        const tcgCard = panel.querySelector('.sc-tcg-card');
         const threatsProps = {
           onField: (lastThreats?.onField ?? []).map(toPanelThreatRow),
           incoming: (lastThreats?.incoming ?? []).map(toPanelThreatRow),
         };
         const newThreats = renderThreatsPanel(threatsProps);
-        const oldThreats = panel.querySelector('.sc-trainer-card');
-        if (oldThreats) {
-          oldThreats.replaceWith(newThreats);
-        } else if (tcgCard && tcgCard.parentElement) {
-          // Mount ABOVE the TCG card so the "what's about to kill you"
-          // signal is the first thing the user sees — threats are the
-          // emergency layer; the recommendation comes after.
-          tcgCard.parentElement.insertBefore(newThreats, tcgCard);
-        } else {
-          panel.appendChild(newThreats);
-        }
+        // Mount ABOVE the TCG card so the "what's about to kill you"
+        // signal is the first thing the user sees — threats are the
+        // emergency layer; the recommendation comes after.
+        mountOrReplace(panel, {
+          newEl: newThreats,
+          replaceTargets: ['.sc-trainer-card'],
+          anchors: [{ selector: '.sc-tcg-card', position: 'before' }],
+        });
         attachPanelToggle(newThreats, '.trainer-header', 'sc-threats-collapsed');
       }
 
@@ -1269,15 +1258,13 @@ export default defineContentScript({
             depth: typeof u.depth === 'number' ? u.depth : 0,
             sims: typeof u.sims === 'number' ? u.sims : 0,
           });
-          const oldPv = panel.querySelector('.sc-pv-card');
-          const threatsEl = panel.querySelector('.sc-trainer-card');
-          if (oldPv) {
-            oldPv.replaceWith(newPv);
-          } else if (threatsEl && threatsEl.parentElement) {
-            threatsEl.parentElement.insertBefore(newPv, threatsEl.nextSibling);
-          } else {
-            panel.appendChild(newPv);
-          }
+          // PV chain sits immediately after the threats panel, so the eye
+          // moves: threats → engine line → recommendation.
+          mountOrReplace(panel, {
+            newEl: newPv,
+            replaceTargets: ['.sc-pv-card'],
+            anchors: [{ selector: '.sc-trainer-card', position: 'after' }],
+          });
           attachPanelToggle(newPv, '.pv-header', 'sc-pv-collapsed');
         }
       }
