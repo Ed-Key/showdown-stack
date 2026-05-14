@@ -66,7 +66,7 @@ export default defineContentScript({
     panel.classList.add('sc-panel-v2');
     // Force scroll + sizing to win over legacy #sc-panel CSS via setProperty('important').
     // Proper fix: dedupe legacy chrome rules into tcg.css. Tracked for follow-up.
-    panel.style.setProperty('width', '360px', 'important');
+    panel.style.setProperty('width', '400px', 'important');
     panel.style.setProperty('max-height', 'calc(100vh - 32px)', 'important');
     panel.style.setProperty('overflow-y', 'auto', 'important');
     panel.style.setProperty('overflow-x', 'hidden', 'important');
