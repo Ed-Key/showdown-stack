@@ -1,11 +1,8 @@
 """Per-opponent-Pokemon belief tracking for the Showdown copilot.
 
-Phase 1 ships the OpponentBelief dataclass and the BeliefTracker class.
-Inference rules R1-R5 are added in subsequent tasks (Tasks 4-8). The
-skeleton compiles and the state-recording (on_reveal_*) methods work;
-the rule-firing methods (on_switch_in, on_move_used) are stubs that
-record state without yet emitting impossible_items / impossible_abilities
-inferences.
+Tracks revealed moves/items/abilities plus conservative impossible-item,
+impossible-ability, hazard-immunity, and speed-range inferences. The proxy
+uses this state to filter opponent priors before building engine requests.
 
 See docs/superpowers/specs/2026-04-26-plan-h-posterior-tracking-design.md
 """
@@ -39,9 +36,9 @@ def _normalize(name: str) -> str:
 
 
 # Status moves (category = "Status" in poke-env / Showdown). This is a
-# Phase 1 hardcoded subset covering the most-used status moves on
-# competitive ladder. Phase 2 should replace this with a lookup against
-# poke-env's Move.category or a generated complete list.
+# conservative hardcoded subset covering the most-used status moves on
+# competitive ladder. Replace with a dex-backed Move.category lookup or a
+# generated complete list when that data is available in this layer.
 #
 # EXCLUDED (these are damaging-category in gen 5+ — AV holders CAN use them):
 # - Knock Off (Dark physical)
@@ -77,9 +74,9 @@ _STATUS_MOVES: frozenset[str] = frozenset({
 def _is_status_move(move_id: str) -> bool:
     """True if move_id is a known status-category move.
 
-    Phase 1: hardcoded set above. Returns False for unknown moves to
-    avoid false positives (better to miss an AV inference than to
-    incorrectly rule out AV when the move is actually damaging).
+    Returns False for unknown moves to avoid false positives (better to
+    miss an AV inference than to incorrectly rule out AV when the move is
+    actually damaging).
     """
     return _normalize(move_id) in _STATUS_MOVES
 
@@ -97,9 +94,9 @@ class OpponentBelief:
       `observed_hazard_damage_on_switch_in` (the SR damage line
       arrives AFTER the switch line in the same buffer flush).
 
-    Phase 1 omits speed_range, hidden_power_possibilities, boosts,
-    and volatile_statuses — those are Phase 2 (speed_range is queued
-    as Phase 2 task #1).
+    This tracker intentionally does not store Hidden Power possibilities,
+    boosts, or volatile statuses. Live battle state owns boosts/volatiles;
+    Hidden Power tracking has not been added.
     """
     species: str  # canonical (lowercase normalized)
     revealed_moves: set[str] = field(default_factory=set)
@@ -118,13 +115,13 @@ class OpponentBelief:
     used_status_move: bool = False  # diagnostic only; R2 fires inline
     # Switch-in context (drives R4 — consumed at on_turn_boundary).
     # took_hazard_damage_this_stretch is set True by on_hazard_damage when
-    # SR / Spikes / T-Spikes hits this Pokemon. R4 (Task 8) fires only
+    # SR / Spikes / T-Spikes hits this Pokemon. R4 fires only
     # when (just_switched_in AND hazards active AND NOT took_damage).
     just_switched_in: bool = False
     side_hazards_at_switch_in: dict[str, int] = field(default_factory=dict)
     took_hazard_damage_this_stretch: bool = False
 
-    # ----- Speed inference (Phase 2) -----
+    # ----- Speed inference -----
     # Final Speed-stat range at level 100. None = "not narrowed yet" (priors
     # filter falls through to all spreads). Inclusive bounds. Updated by
     # BeliefTracker.on_turn_boundary_speed; reset by on_item_swapped.
@@ -193,8 +190,8 @@ def has_type(
 
 # Abilities that announce themselves on switch-in. Absence of the
 # announcement → ability ruled out, modulo the carve-outs below.
-# Drives R5 (Task 4): on every opp switch-in we eagerly add ALL of these
-# to impossible_abilities, with three carve-outs (gen3 Pressure silent,
+# Drives R5: on every opp switch-in we eagerly add ALL of these to
+# impossible_abilities, with three carve-outs (gen3 Pressure silent,
 # weather-setter when matching weather already up, our active has
 # Neutralizing Gas which suppresses the entire pass).
 _AUTO_TRIGGER_ABILITIES_ON_SWITCH_IN: frozenset[str] = frozenset({
@@ -218,7 +215,7 @@ _ABILITY_TO_WEATHER: dict[str, str] = {
 }
 
 
-# Species whose Phase-1 ability pool includes Sheer Force or Magic Guard.
+# Species whose ability pool includes Sheer Force or Magic Guard.
 # If opp's species is in this set, R3 does NOT fire (Life Orb stays
 # possible). Reasoning: Sheer Force suppresses LO recoil entirely on
 # secondary-effect moves; Magic Guard is immune to all indirect damage
@@ -226,13 +223,13 @@ _ABILITY_TO_WEATHER: dict[str, str] = {
 # can't conclude "not LO" merely from absence-of-recoil on a single
 # damaging move.
 #
-# Phase 2 should derive this set programmatically from chaos data — see
-# Task 8 (R4) for the same data-driven approach to Levitate / Magic
-# Guard. Use normalized species ids (lowercase alphanumeric) — they're
+# Derive this set programmatically from chaos data when this layer has
+# access to the same data source as the R4 ability pools. Use normalized
+# species ids (lowercase alphanumeric) — they're
 # compared against `_normalize(species)`.
 #
-# AUDITED 2026-04-26 against poke-env's gen9 pokedex (Plan H Task 6
-# review). Removed 11 species that DO NOT actually have SF or MG in
+# AUDITED 2026-04-26 against poke-env's gen9 pokedex. Removed 11 species
+# that DO NOT actually have SF or MG in
 # their gen-9 ability pool — each was a silent R3 false-negative:
 # - taurospaldea{combat,blaze,aqua} (Intimidate / Anger Point / Cud Chew)
 # - darmanitangalar / darmanitangalarzen (Gorilla Tactics / Zen Mode)
@@ -258,7 +255,7 @@ _SHEERFORCE_OR_MAGICGUARD_SPECIES: frozenset[str] = frozenset({
     "alakazam",                              # Synchronize / Inner Focus / Magic Guard (HA)
     "clefable", "clefairy", "cleffa",        # Cute Charm / Magic Guard / Unaware
     "reuniclus", "duosion", "solosis",       # Overcoat / Magic Guard / Regenerator
-    # Not exhaustive — Phase 2 should derive from chaos data
+    # Not exhaustive — derive from chaos data when available here.
 })
 
 
@@ -292,7 +289,7 @@ _CHOICE_INCOMPATIBLE_MOVES: frozenset[str] = _STATUS_MOVES - frozenset({
 })
 
 
-# ---------- R4 (Task 8): Heavy-Duty Boots from hazard immunity ----------
+# ---------- R4: Heavy-Duty Boots from hazard immunity ----------
 
 # Base-types lookup. Sourced from poke-env's authoritative gen-9 pokedex
 # at module load time so R4's Tera-aware type carve-outs work for ANY
@@ -323,9 +320,9 @@ def _build_base_types_table() -> dict[str, tuple[str, ...]]:
 _BASE_TYPES: dict[str, tuple[str, ...]] = _build_base_types_table()
 
 
-# Phase 2 (speed-range narrowing): mirror of _BASE_TYPES for base Speed
-# stat lookup. Used by on_turn_boundary_speed's forced-scarf check
-# (max_non_scarf comparison) and by priors.py's spread filter.
+# Speed-range narrowing: mirror of _BASE_TYPES for base Speed stat lookup.
+# Used by on_turn_boundary_speed's forced-scarf check (max_non_scarf
+# comparison) and by priors.py's spread filter.
 def _build_base_speeds_table() -> dict[str, int]:
     """Build {normalized_species → base_speed_stat} from poke-env's gen-9
     pokedex. Called once at module load.
@@ -477,11 +474,10 @@ class BeliefTracker:
     # --- State-recording API (called by the live message hook) ---
 
     def on_reveal_move(self, species: str, move_id: str) -> None:
-        """Record that `species` used move `move_id`. Phase 1 skeleton
-        only updates revealed_moves and the move-history fields; the
-        inference-rule firings (R1, R2, R3) are added in Tasks 4-7
-        with `[from]`-token guard at the call site (caller must check
-        is_passive_move_event before calling this method).
+        """Record that `species` used move `move_id`.
+
+        This is a state recorder only. Use `on_move` for protocol events
+        that should run passive-source guards and R1/R2/R3 inference.
 
         Empty / whitespace-only `move_id` is ignored — _normalize would
         produce "", which would silently corrupt R1 state (last_used_move
@@ -508,13 +504,13 @@ class BeliefTracker:
         so the `[from]` guard runs. `on_reveal_move` is an internal state
         recorder used by `on_move` and the harness fallback path.
 
-        R1 (Task 7): Choice items lock the holder to one move; using two
+        R1: Choice items lock the holder to one move; using two
         different moves on the same active stretch (no switch, no item swap)
         disproves Choice Band / Scarf / Specs. Additionally, certain moves
         (status setups, recovery, Substitute, protection, Leech Seed) are
         categorically Choice-impossible and disprove on the FIRST observation.
-        R2 (Task 5): if the opp uses a status-category move, Assault Vest
-        is ruled out (AV blocks status moves entirely). R3 (Task 6): if
+        R2: if the opp uses a status-category move, Assault Vest
+        is ruled out (AV blocks status moves entirely). R3: if
         the opp uses any damaging move and the species is NOT in the SF/MG
         ability pool, Life Orb is ruled out — LO recoil announces itself
         in the protocol, so absence of recoil on a damaging move from a
@@ -525,9 +521,9 @@ class BeliefTracker:
         overwrites. R2 / R3 fire AFTER state recording. Final order:
             [from] guard → R1 → on_reveal_move → R2 → R3
         """
-        # Defensive: callers should pass a list, but Task 9 harness wiring
-        # is the first real producer and a malformed protocol line could
-        # surface as None. Treat None as "no [from] tokens" (active move).
+        # Defensive: callers should pass a list, but malformed protocol
+        # lines can surface as None. Treat None as "no [from] tokens"
+        # (active move).
         if split_msg is None:
             split_msg = []
         if is_passive_move_event(split_msg):
@@ -548,8 +544,8 @@ class BeliefTracker:
         # impossible. Fires on the FIRST observation, no history needed.
         if norm_move in _CHOICE_INCOMPATIBLE_MOVES:
             b.impossible_items.update(_CHOICE_ITEMS)
-            # Phase 2: scarf rollback — R1 disproves the entire Choice
-            # family, so an inferred-scarf hypothesis must be retracted.
+            # R1 disproves the entire Choice family, so an inferred-scarf
+            # hypothesis must be retracted.
             if b.item_inferred_choicescarf:
                 self._recompute_speed_range_no_scarf(species)
 
@@ -561,11 +557,11 @@ class BeliefTracker:
             and norm_move != b.last_used_move
         ):
             b.impossible_items.update(_CHOICE_ITEMS)
-            # Phase 2: scarf rollback (same rationale as early-disprove).
+            # Same scarf rollback rationale as early-disprove.
             if b.item_inferred_choicescarf:
                 self._recompute_speed_range_no_scarf(species)
 
-        # State recording (existing skeleton path)
+        # State recording
         self.on_reveal_move(species, move_id)
 
         # R2: Assault Vest blocks status moves; if a status move was used,
@@ -577,7 +573,7 @@ class BeliefTracker:
             b.used_status_move = True
             return
 
-        # R3 (Task 6): damaging move → LO ruled out except for SF/MG
+        # R3: damaging move → LO ruled out except for SF/MG
         # candidates. Sheer Force suppresses LO recoil; Magic Guard is
         # immune to indirect damage. If the species could have either
         # ability, absence of recoil isn't evidence — leave LO possible.
@@ -590,9 +586,9 @@ class BeliefTracker:
 
         Discards the revealed item from `impossible_items` — a positive
         protocol-asserted reveal SUPERSEDES any prior false impossibility
-        (e.g., R4 / Task 8's eager `airballoon` rule-out on every
-        switch-in must be rolled back when Air Balloon actually
-        announces). Without this discard, the priors filter at
+        (e.g., R4's eager `airballoon` rule-out on every switch-in must
+        be rolled back when Air Balloon actually announces). Without this
+        discard, the priors filter at
         `priors.py:get_set` would reject every candidate set because
         the revealed item is in impossible_items AND the equality check
         for revealed_item would fail on every other candidate — empty
@@ -604,7 +600,7 @@ class BeliefTracker:
         b = self.get(species)
         b.revealed_item = norm_item
         b.impossible_items.discard(norm_item)
-        # Phase 2: scarf rollback when revealed item contradicts inferred scarf.
+        # Roll back inferred scarf when a revealed item contradicts it.
         if b.item_inferred_choicescarf and norm_item in _NON_SCARF_CHOICE:
             self._recompute_speed_range_no_scarf(species)
 
@@ -645,8 +641,8 @@ class BeliefTracker:
             b.impossible_items.discard(norm_new)
         b.last_used_move = None
         b.moves_used_since_switch_in = []
-        # Phase 2: speed bracket flips when item changes; clear all cached
-        # speed inference. Future observations will repopulate.
+        # Speed bracket flips when item changes; clear all cached speed
+        # inference. Future observations will repopulate.
         b.speed_range = None
         b.item_inferred_choicescarf = False
         b.speed_observations = []
@@ -761,7 +757,7 @@ class BeliefTracker:
         """Called when `species` takes damage from an entry hazard
         (Stealth Rock / Spikes / Toxic Spikes). Sets the per-Pokemon
         flag that on_turn_boundary reads to suppress R4. Without this
-        flag, R4 (Task 8) would over-fire HDB on every switch-in to a
+        flag, R4 would over-fire HDB on every switch-in to a
         hazardy side, including the cases where damage actually happened.
         """
         b = self.get(species)
@@ -824,8 +820,8 @@ class BeliefTracker:
         if norm_species in _MAGICGUARD_SPECIES:
             return
 
-        # Filter to damaging hazards (Phase 1 scope: SR / Spikes / T-Spikes;
-        # Sticky Web inflicts no damage so it's outside R4's purview).
+        # Filter to damaging hazards; Sticky Web inflicts no damage so
+        # it's outside R4's purview.
         damaging_hazards = active_hazards & {"stealthrock", "spikes", "toxicspikes"}
         if not damaging_hazards:
             return
@@ -854,7 +850,7 @@ class BeliefTracker:
         b.impossible_items.update(_R4_RULED_OUT_ITEMS)
 
     # ------------------------------------------------------------------
-    # Phase 2 — Speed inference (R6 in our numbering, mirrors foul-play's
+    # Speed inference (R6 in our numbering, mirrors foul-play's
     # check_speed_ranges). See spec at
     # docs/superpowers/specs/2026-04-29-plan-h-phase2-speed-range-design.md
     # ------------------------------------------------------------------
