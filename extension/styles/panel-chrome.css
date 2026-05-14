@@ -1,0 +1,204 @@
+/*
+ * Legacy panel chrome — the wrapping #sc-panel container, .sc-pinned region,
+ * conflict-banner stub, note modal, damage matrix, and PIMC vote bar.
+ *
+ * Extracted from content.ts during Phase 4 polish. The TCG card + threats
+ * panel + PV chain are styled in tcg.css (panels/*.ts produce those elements);
+ * this file owns the surrounding chrome.
+ *
+ * Legacy hides: .sc-stats, .sc-pv, .sc-alts, and .sc-pimc-pinned (without
+ * .visible) carry `display: none !important` because legacy code paths still
+ * write to them as state flags (e.g. content.ts L1897 reads sc-stats text to
+ * gate the "Waiting…" message). Cleanup is deferred to Phase 3-followup;
+ * keep these rules in place until the writes themselves are removed.
+ */
+
+#sc-panel {
+  position: fixed; bottom: 20px; right: 20px;
+  width: 320px; background: #1a1a1a; color: #eee;
+  border: 2px solid #4af; border-radius: 6px;
+  padding: 10px 12px; font-family: ui-monospace, "Menlo", monospace;
+  font-size: 12px; z-index: 2147483647;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  user-select: none;
+}
+#sc-panel .sc-header { font-weight: bold; margin-bottom: 6px; color: #4af; }
+#sc-panel .sc-pinned {
+  border-bottom: 1px solid #333;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+#sc-panel .sc-conflict {
+  background: #5a1f1f;
+  color: #ffd0d0;
+  padding: 4px 6px;
+  border-radius: 3px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+#sc-panel .sc-conflict.warn {
+  background: #5a4a1f;
+  color: #fff0c0;
+}
+#sc-panel .sc-conflict.info {
+  background: #2a2a2a;
+  color: #aaa;
+}
+/* .sc-best, .sc-trend-arrow*, .sc-sparkline*, .sc-desperate were removed
+   in Task 12 — the TCG card (panels/tcg-card.ts, styled via tcg.css) now
+   owns the recommendation row including its own trend slot, sparkline and
+   confidence badge. The legacy <div class="sc-best"> element is still in
+   the initial panel HTML (so the "Copilot — idle" first paint has
+   something to swap out) but it's replaced by the TCG card on the first
+   engine update and never restyled afterward; its CSS rule is dead. */
+/* Legacy text slots — superseded by TCG card + threats/PV panels. Hidden
+   because legacy code still writes to them as state flags; we keep the
+   elements so .querySelector! assertions don't blow up. */
+#sc-panel .sc-stats,
+#sc-panel .sc-pv,
+#sc-panel .sc-alts,
+#sc-panel .sc-pimc-pinned { display: none !important; }
+#sc-panel .sc-notes-header {
+  font-size: 11px; color: #fc6; margin-top: 8px; cursor: pointer;
+  border-top: 1px dashed #333; padding-top: 6px;
+}
+#sc-panel .sc-notes-toggle { color: #888; font-style: italic; margin-left: 4px; }
+#sc-panel .sc-notes-body { margin-top: 4px; }
+#sc-panel .sc-battle-note {
+  width: 100%; box-sizing: border-box;
+  background: #0e0e0e; color: #ddd; border: 1px solid #333;
+  border-radius: 4px; padding: 4px 6px;
+  font: inherit; font-size: 11px; min-height: 40px; max-height: 200px;
+  resize: vertical;
+}
+#sc-note-modal {
+  position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.6); display: none;
+  align-items: center; justify-content: center;
+  z-index: 2147483646;
+}
+#sc-note-modal.visible { display: flex; }
+#sc-note-modal .sc-note-box {
+  background: #1a1a1a; border: 2px solid #4af; border-radius: 6px;
+  padding: 14px 18px; min-width: 380px;
+  font-family: ui-monospace, "Menlo", monospace;
+}
+#sc-note-modal .sc-note-label {
+  color: #4af; font-size: 12px; font-weight: bold; margin-bottom: 6px;
+}
+#sc-note-modal .sc-note-input {
+  width: 100%; box-sizing: border-box;
+  background: #0e0e0e; color: #eee; border: 1px solid #333;
+  border-radius: 4px; padding: 6px 8px;
+  font: inherit; font-size: 13px;
+}
+#sc-note-modal .sc-override-tag {
+  width: 100%; box-sizing: border-box;
+  background: #0e0e0e; color: #eee; border: 1px solid #333;
+  border-radius: 4px; padding: 6px 8px;
+  font: inherit; font-size: 12px;
+  margin: 6px 0;
+}
+#sc-note-modal .sc-note-hint {
+  color: #888; font-size: 10px; margin-top: 6px;
+}
+#sc-panel .sc-matrix-legend {
+  font-size: 10px; color: #888; margin: 4px 0 6px 0;
+  line-height: 1.7;
+}
+#sc-panel .sc-matrix-legend-chip {
+  display: inline-block; padding: 1px 6px; margin-right: 4px;
+  border: 1px solid #2a2a2a; border-radius: 2px;
+  font-size: 9px; color: #ccc;
+}
+#sc-panel .sc-matrix-scroll {
+  overflow-x: auto; max-width: 100%;
+}
+#sc-panel .sc-matrix { border-collapse: collapse; font-size: 10px; }
+#sc-panel .sc-matrix th, #sc-panel .sc-matrix td {
+  padding: 2px 4px; border: 1px solid #2a2a2a; text-align: center;
+  white-space: nowrap;
+}
+#sc-panel .sc-matrix .sc-row-label { text-align: left; color: #aaa; }
+/* Damage-tier color tokens — applied to BOTH matrix cells AND legend chips
+   so the chip swatches match the cell colors users see in the table. */
+#sc-panel .sc-immune { color: #666; }
+#sc-panel .sc-warn { background: #4a3a1f; color: #ffd9a8; }
+#sc-panel .sc-2hko { background: #5a3a1f; color: #ffd9a8; }
+#sc-panel .sc-ohko { background: #5a1f1f; color: #fff; font-weight: bold; }
+#sc-panel .sc-matrix-empty { color: #888; font-style: italic; padding: 4px; }
+#sc-panel .sc-threats-header { font-size: 11px; color: #aaa; padding: 2px 0; }
+#sc-panel .sc-threats-section { font-size: 11px; padding: 4px 0; border-top: 1px dotted #2a2a2a; }
+#sc-panel .sc-threat-row { padding: 1px 0; color: #ddd; }
+#sc-panel .sc-conf { color: #888; font-size: 10px; }
+#sc-panel .sc-empty { color: #666; font-size: 10px; padding: 2px 0; }
+#sc-panel .sc-explainer-text {
+  font-size: 11px; line-height: 1.4; color: #ddd;
+  padding: 4px; white-space: pre-wrap;
+}
+#sc-panel .sc-explainer-loading {
+  color: #888; font-style: italic; padding: 4px;
+}
+#sc-panel .sc-tp-row {
+  display: flex; justify-content: space-between;
+  font-size: 11px; padding: 1px 0;
+}
+#sc-panel .sc-tp-name { color: #ddd; flex: 1; }
+#sc-panel .sc-tp-stat {
+  color: #aaa; font-size: 10px;
+  margin-left: 8px; white-space: nowrap;
+}
+/* PIMC vote-bar card. Compact layout, fits inside the 320px panel.
+   Pinned summary line goes at the top of the panel; the full vote table
+   lives inside an expandable card so it doesn't push other cards out of
+   view. */
+#sc-panel .sc-pimc-pinned {
+  font-size: 11px; color: #cde; padding: 3px 0;
+  border-top: 1px dotted #2a2a2a; margin-top: 4px;
+  display: none;
+}
+#sc-panel .sc-pimc-pinned.visible { display: block; }
+#sc-panel .sc-pimc-pinned.split { color: #ffd9a8; }
+#sc-panel .sc-pimc-pinned .sc-pimc-badge {
+  display: inline-block; margin-left: 6px; padding: 0 4px;
+  background: #1f3a4a; color: #9cf; border-radius: 2px;
+  font-size: 9px; font-weight: bold; vertical-align: middle;
+}
+#sc-panel .sc-pimc-header {
+  font-size: 11px; padding: 3px 0; color: #ddd;
+}
+#sc-panel .sc-pimc-header.sc-pimc-split {
+  background: #4a3a1f; color: #ffd9a8; padding: 3px 6px; border-radius: 3px;
+}
+#sc-panel .sc-pimc-summary { font-weight: bold; }
+#sc-panel .sc-pimc-badge {
+  display: inline-block; margin-left: 6px; padding: 0 4px;
+  background: #1f3a4a; color: #9cf; border-radius: 2px;
+  font-size: 9px; font-weight: bold;
+}
+#sc-panel .sc-pimc-split-tag {
+  display: inline-block; margin-left: 6px;
+  color: #ffb060; font-size: 10px; font-weight: bold;
+}
+#sc-panel .sc-pimc-table { margin-top: 4px; }
+#sc-panel .sc-pimc-row {
+  padding: 3px 4px; border-top: 1px dotted #2a2a2a;
+}
+#sc-panel .sc-pimc-row-top { background: #18242c; }
+#sc-panel .sc-pimc-row-line {
+  display: flex; gap: 6px; align-items: baseline;
+}
+#sc-panel .sc-pimc-move {
+  flex: 1; font-weight: bold; color: #7fe;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#sc-panel .sc-pimc-votes {
+  color: #ddd; font-size: 11px; min-width: 32px; text-align: right;
+}
+#sc-panel .sc-pimc-share {
+  color: #aaa; font-size: 10px; min-width: 36px; text-align: right;
+}
+#sc-panel .sc-pimc-opps {
+  font-size: 10px; color: #888; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
