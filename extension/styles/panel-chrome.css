@@ -23,11 +23,44 @@
   font-size: 12px; z-index: 2147483647;
   user-select: none;
 }
-#sc-panel .sc-header { font-weight: bold; margin-bottom: 6px; color: #4af; }
+/* Status chip — replaces the bare "Copilot — idle" text floating on the
+   page background. Self-contained pill with pulsing dot so the user can see
+   the extension is alive even before the first engine update. */
+#sc-panel .sc-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 9px;
+  margin: 0 0 8px;
+  background: rgba(14, 14, 24, 0.78);
+  color: #8ab4f8;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+#sc-panel .sc-header::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4af;
+  box-shadow: 0 0 6px rgba(74, 170, 255, 0.7);
+  animation: sc-pulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes sc-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.05); }
+}
+
 #sc-panel .sc-pinned {
-  border-bottom: 1px solid #333;
-  padding-bottom: 6px;
-  margin-bottom: 6px;
+  padding-bottom: 0;
 }
 #sc-panel .sc-conflict {
   background: #5a1f1f;
@@ -55,13 +88,32 @@
 /* Legacy text slots — superseded by TCG card + threats/PV panels. Hidden
    because legacy code still writes to them as state flags; we keep the
    elements so .querySelector! assertions don't blow up. */
+#sc-panel .sc-best,
 #sc-panel .sc-stats,
 #sc-panel .sc-pv,
 #sc-panel .sc-alts,
 #sc-panel .sc-pimc-pinned { display: none !important; }
+
+/* Battle-note toggle as a smaller companion chip below the main status. */
 #sc-panel .sc-notes-header {
-  font-size: 11px; color: #fc6; margin-top: 8px; cursor: pointer;
-  border-top: 1px dashed #333; padding-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  margin: 8px 0 0;
+  background: rgba(30, 24, 14, 0.78);
+  color: #ffc966;
+  font-family: 'Public Sans', system-ui, sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 201, 102, 0.18);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+#sc-panel .sc-notes-header:hover {
+  background: rgba(40, 32, 16, 0.85);
 }
 #sc-panel .sc-notes-toggle { color: #888; font-style: italic; margin-left: 4px; }
 #sc-panel .sc-notes-body { margin-top: 4px; }
