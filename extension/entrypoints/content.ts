@@ -3,15 +3,12 @@
 // /analyze/stream endpoint, streams NDJSON updates into a floating panel.
 import { parseBattlePostMortem, type BattlePostMortem } from '../utils/post-mortem';
 import {
-  norm, padMoves, padMovesWithPriors, resolveTypes, computeOpponentStats,
-  buildMyPokemon, buildOppPokemon, emptyPokemon, translateSideConditions,
-  extractVolatileStatuses, extractVolatileDurations, computeProtectStreak,
-  buildSide, deriveLastUsedMove, lookupMovePriority, applyBotSpeedModifierChain,
-  extractTurnMoveOrder, detectWeather, detectTerrain, isTrickRoom,
+  norm,
+  buildMyPokemon, buildOppPokemon,
+  detectWeather, detectTerrain,
   buildPlanHMeta, translate,
-  TYPE_CHART, DEFAULT_SC, STATUS,
 } from '../lib/translate';
-import { snapshotState, snapshotSide } from '../lib/snapshot';
+import { snapshotState } from '../lib/snapshot';
 import { fetchBeliefSnapshot, type BeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
@@ -27,6 +24,10 @@ import { getMoveType, getPokemonPrimaryType, isSwitchOption } from '../lib/showd
 import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
 import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
 import { renderPvChain, type PvStep } from '../panels/pv-chain';
+import {
+  PROXY_BASE_URL, ENGINE_STREAM_URL, PROXY_ANNOTATION_URL, PROXY_POSTMORTEM_URL,
+  POLL_MS, ANALYSIS_TIME_MS, UPDATE_INTERVAL_MS,
+} from '../config';
 import '../styles/tcg.css';
 
 export default defineContentScript({
@@ -55,10 +56,6 @@ export default defineContentScript({
     // opp-Pokemon overlays. If the proxy isn't running the request fails;
     // start it with `python -m showdown_copilot.proxy`. To bypass the proxy
     // entirely (e.g., when only the engine is running), point this at :7267.
-    const ENGINE_URL = 'http://localhost:7271/analyze/stream';
-    const POLL_MS = 500;
-    const ANALYSIS_TIME_MS = 6000;
-    const UPDATE_INTERVAL_MS = 400;
 
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
@@ -425,7 +422,7 @@ export default defineContentScript({
         lastMatrix = null;
         return;
       }
-      const snap = await fetchBeliefSnapshot('http://localhost:7271', br.id);
+      const snap = await fetchBeliefSnapshot(PROXY_BASE_URL, br.id);
       if (snap) lastBeliefSnapshot = snap;
       const beliefByOpp: Record<string, any> = {};
       for (const [species, b2] of Object.entries(snap?.opponents || {})) {
@@ -538,7 +535,6 @@ export default defineContentScript({
     // Also fire-and-forget POSTed to the proxy at /annotation so they
     // land on disk at analysis/play-notes/YYYY-MM-DD.jsonl independently
     // of localStorage capture.
-    const PROXY_NOTE_URL = 'http://localhost:7271/annotation';
 
     // Updated on every engine tick so the keyboard handler always knows
     // the current battle. null if no live battle.
@@ -613,7 +609,7 @@ export default defineContentScript({
       overrideTag?: string | null;
     }): void {
       // Fire-and-forget — do not block UX. localStorage is the fallback.
-      fetch(PROXY_NOTE_URL, {
+      fetch(PROXY_ANNOTATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...payload, timestampMs: Date.now() }),
@@ -795,7 +791,7 @@ export default defineContentScript({
       // converge to one file per battle. Eliminates the navigate-away data
       // loss case — the disk archive stays current even if the user closes
       // the tab before Showdown's battle-end signal fires.
-      fetch('http://localhost:7271/postmortem', {
+      fetch(PROXY_POSTMORTEM_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: json,
@@ -1527,7 +1523,7 @@ export default defineContentScript({
         if (b && br?.id) {
           explainerLoading = true;
           fetchExplanation({
-            proxyUrl: 'http://localhost:7271',
+            proxyUrl: PROXY_BASE_URL,
             battleId: br.id,
             turn: b.turn,
             rqid: record.rqid ?? 0,
@@ -1549,7 +1545,7 @@ export default defineContentScript({
       const myCtrl = abortCtrl;
       hdrEl.textContent = 'Copilot — analyzing…';
       try {
-        const resp = await fetch(ENGINE_URL, {
+        const resp = await fetch(ENGINE_STREAM_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1820,7 +1816,7 @@ export default defineContentScript({
           const mySnaps = myTeam.map((p: any) => buildMyPokemon(p, null, win));
           const oppSnaps = oppTeam.map((p: any) => buildOppPokemon(p, win));
 
-          fetchBeliefSnapshot('http://localhost:7271', br?.id || '').then((snap: any) => {
+          fetchBeliefSnapshot(PROXY_BASE_URL, br?.id || '').then((snap: any) => {
             if (snap) lastBeliefSnapshot = snap;
             const beliefByOpp: Record<string, any> = {};
             for (const [sp, b2] of Object.entries(snap?.opponents || {})) {
