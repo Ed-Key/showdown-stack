@@ -3,18 +3,13 @@
  * lib/conflict.ts:detectConflict() returns a non-null result.
  * Pure: data in, DOM element out.
  */
+import { escapeHtml } from './_shared';
 
 export type ConflictSeverity = 'STRONG' | 'POSSIBLE' | 'PIVOT';
 
 export interface ConflictBannerProps {
   severity: ConflictSeverity;
   reason: string;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]!));
 }
 
 const SEVERITY_LABEL: Record<ConflictSeverity, string> = {

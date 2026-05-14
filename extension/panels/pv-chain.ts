@@ -1,3 +1,5 @@
+import { escapeHtml } from './_shared';
+
 export interface PvStep {
   move: string;
   side: 'me' | 'opp';
@@ -7,12 +9,6 @@ export interface PvChainProps {
   steps: PvStep[];
   depth: number;
   sims: number;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]!));
 }
 
 function formatSims(sims: number): string {

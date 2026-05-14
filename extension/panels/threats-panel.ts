@@ -1,4 +1,5 @@
 import { speciesToSpriteURL } from '../lib/tcg/species-url';
+import { escapeHtml } from './_shared';
 
 export interface ThreatRow {
   move: string;
@@ -12,12 +13,6 @@ export interface ThreatRow {
 export interface ThreatsPanelProps {
   onField: ThreatRow[];
   incoming: ThreatRow[];
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]!));
 }
 
 function rowHtml(t: ThreatRow): string {

@@ -24,6 +24,7 @@ import { getMoveType, getPokemonPrimaryType, isSwitchOption } from '../lib/showd
 import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
 import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
 import { renderPvChain, type PvStep } from '../panels/pv-chain';
+import { escapeHtml } from '../panels/_shared';
 import {
   PROXY_BASE_URL, ENGINE_STREAM_URL, PROXY_ANNOTATION_URL, PROXY_POSTMORTEM_URL,
   POLL_MS, ANALYSIS_TIME_MS, UPDATE_INTERVAL_MS,
@@ -1172,7 +1173,7 @@ export default defineContentScript({
         trend === 'falling' ? 'sc-trend-falling' :
         trend === 'collapsing' ? 'sc-trend-collapsing' : '';
       const trendHtml = trendGlyph
-        ? ` <span class="sc-trend-arrow ${trendCls}" title="${escapeAttr(trendTitle)}">${trendGlyph}</span>`
+        ? ` <span class="sc-trend-arrow ${trendCls}" title="${escapeHtml(trendTitle)}">${trendGlyph}</span>`
         : '';
 
       const desperateHtml = desperate
@@ -1298,13 +1299,6 @@ export default defineContentScript({
       }
     }
 
-    function escapeHtmlText(s: string): string {
-      return String(s ?? '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-    function escapeAttr(s: string): string {
-      return escapeHtmlText(s).replace(/"/g, '&quot;');
-    }
 
     function updatePimcDisplay(u: any) {
       const breakdown = Array.isArray(u?.pimcBreakdown) ? u.pimcBreakdown : null;
@@ -1326,13 +1320,9 @@ export default defineContentScript({
       pimcPinnedEl.classList.add('visible');
       pimcPinnedEl.classList.toggle('split', split);
       pimcPinnedEl.innerHTML =
-        `${agree} of ${k} hypotheses agree on: <b>${escapePimcText(String(consensus))}</b>` +
+        `${agree} of ${k} hypotheses agree on: <b>${escapeHtml(consensus)}</b>` +
         `<span class="sc-pimc-badge">PIMC: K=${k}</span>` +
         (split ? ' <span class="sc-pimc-split-tag">⚠ split</span>' : '');
-    }
-
-    function escapePimcText(s: string): string {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     // ---- engine call with native fetch streaming ------------------------

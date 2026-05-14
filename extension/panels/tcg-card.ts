@@ -6,6 +6,7 @@ import { TCG_TYPE_MAP } from '../lib/tcg/types';
 import { ENERGY_PALETTE } from '../lib/tcg/energy-orbs';
 import { speciesToSpriteURL } from '../lib/tcg/species-url';
 import type { TrendArrow } from '../lib/val-trend';
+import { escapeHtml } from './_shared';
 
 export interface AlternativeMove {
   name: string;
@@ -248,10 +249,4 @@ function buildMoveRow(alt: AlternativeMove): HTMLElement {
   row.appendChild(dmg);
 
   return row;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]!));
 }
