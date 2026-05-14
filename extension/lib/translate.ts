@@ -453,6 +453,122 @@ export function computeProtectStreak(b: any): { p1: number; p2: number } {
   return streaks;
 }
 
+/** Pending Future Sight / Doom Desire state forwarded to the engine.
+ *  Reconstructed from Showdown's stepQueue protocol log. The engine reads
+ *  via Side.future_sight (turns, pokemon_index) and refuses to allow a
+ *  new FS cast while turns > 0 (choice_effects.rs:913).
+ */
+export type FutureSightPayload = {
+  turns: number;
+  pokemonIndex: number;
+};
+
+type ProtocolSide = 'p1' | 'p2';
+
+function actorSide(actor: string): ProtocolSide | null {
+  if (actor.startsWith('p1')) return 'p1';
+  if (actor.startsWith('p2')) return 'p2';
+  return null;
+}
+
+function otherSide(side: ProtocolSide): ProtocolSide {
+  return side === 'p1' ? 'p2' : 'p1';
+}
+
+function speciesFromDetails(details: any): string {
+  return norm((details || '').toString().split(',')[0]);
+}
+
+function teamSpeciesOrder(pokemon: any[]): string[] {
+  return (pokemon || []).map((p: any) =>
+    norm(p?.speciesForme || p?.species?.name || p?.species || ''),
+  );
+}
+
+function sideOrderForBattle(b: any): Record<ProtocolSide, string[]> {
+  const mySideId = actorSide(b?.mySide?.sideid || b?.mySide?.id || 'p1') || 'p1';
+  const oppSideId = otherSide(mySideId);
+  const out: Record<ProtocolSide, string[]> = { p1: [], p2: [] };
+  out[mySideId] = teamSpeciesOrder(b?.myPokemon || []);
+  out[oppSideId] = teamSpeciesOrder(b?.farSide?.pokemon || []);
+  return out;
+}
+
+/** Replay the protocol log to find any pending Future Sight per side.
+ *  Returns turns remaining (3=just cast, 2=next, 1=resolves this turn,
+ *  null=no pending FS). pokemonIndex is the source Pokemon's slot. */
+export function computeFutureSightState(b: any): Record<ProtocolSide, FutureSightPayload | null> {
+  const stepQueue: string[] = b?.stepQueue || [];
+  const teamOrder = sideOrderForBattle(b);
+  const activeSlot: Record<ProtocolSide, number> = { p1: 0, p2: 0 };
+  const pending: Record<ProtocolSide, { turnStarted: number; pokemonIndex: number } | null> = {
+    p1: null,
+    p2: null,
+  };
+  let currentTurn = typeof b?.turn === 'number' ? b.turn : 0;
+
+  const rememberActive = (side: ProtocolSide, details: any) => {
+    const species = speciesFromDetails(details);
+    if (!species) return;
+    const idx = teamOrder[side].findIndex((s) => s === species);
+    if (idx >= 0) activeSlot[side] = idx;
+  };
+
+  for (const line of stepQueue) {
+    const parts = (line || '').split('|');
+    const kind = parts[1];
+    if (kind === 'turn') {
+      const t = parseInt(parts[2] || '0', 10);
+      if (Number.isFinite(t) && t > 0) currentTurn = t;
+    } else if (kind === 'switch' || kind === 'drag' || kind === 'replace') {
+      const side = actorSide(parts[2] || '');
+      if (side) rememberActive(side, parts[3]);
+    } else if (kind === '-start') {
+      const effect = norm(parts[3] || '');
+      // Doom Desire shares the same FS-pending mechanic; both should mask
+      // future FUTURESIGHT recommendations.
+      if (effect === 'movefuturesight' || effect === 'movedoomdesire') {
+        const sourceSide = actorSide(parts[2] || '');
+        if (sourceSide) {
+          pending[sourceSide] = {
+            turnStarted: currentTurn,
+            pokemonIndex: activeSlot[sourceSide],
+          };
+        }
+      }
+    } else if (kind === '-end') {
+      const effect = norm(parts[3] || '');
+      if (effect === 'movefuturesight' || effect === 'movedoomdesire') {
+        // -end fires on the TARGET when FS resolves; clear pending on the
+        // SOURCE side (otherSide of target).
+        const targetSide = actorSide(parts[2] || '');
+        if (targetSide) pending[otherSide(targetSide)] = null;
+        else {
+          pending.p1 = null;
+          pending.p2 = null;
+        }
+      }
+    }
+  }
+
+  const toPayload = (side: ProtocolSide): FutureSightPayload | null => {
+    const p = pending[side];
+    if (!p) return null;
+    const elapsedTurns = Math.max(0, currentTurn - p.turnStarted);
+    const turns = 3 - elapsedTurns;
+    if (turns <= 0 || turns > 3) return null;
+    return {
+      turns,
+      pokemonIndex: Math.max(0, Math.min(5, p.pokemonIndex)),
+    };
+  };
+
+  return {
+    p1: toPayload('p1'),
+    p2: toPayload('p2'),
+  };
+}
+
 export function buildSide(
   mons: any[], activeIdx: number, boosts: any, rawSide: any,
   req: any = null, protectStreak: number = 0,
@@ -462,6 +578,7 @@ export function buildSide(
     confusion: number; encore: number; lockedmove: number;
     slowstart: number; taunt: number; yawn: number;
   } | null = null,
+  futureSight: FutureSightPayload | null = null,
 ) {
   const out = mons.slice();
   while (out.length < 6) out.push(emptyPokemon());
@@ -500,6 +617,7 @@ export function buildSide(
     ...(activeVolatileDurations !== null
       ? { volatileStatusDurations: activeVolatileDurations }
       : {}),
+    ...(futureSight && futureSight.turns > 0 ? { futureSight } : {}),
   };
 }
 
@@ -786,9 +904,19 @@ export function translate(b: any, req: any = null, win: any) {
   // companion-data filter on those volatiles.
   const myDurations = extractVolatileDurations(myActive);
   const oppDurations = extractVolatileDurations(oppActive);
+  // Pending Future Sight reconstruction. Replays Showdown's stepQueue
+  // to detect outstanding |-start|move: Future Sight (or Doom Desire)
+  // events that haven't been cleared by |-end|. Forwarded via Side's
+  // futureSight field — engine's translate.rs reads it into
+  // Side.future_sight = (turns, pokemon_index), and choice_effects.rs
+  // refuses to re-cast FS while turns > 0.
+  const futureSightState = computeFutureSightState(b);
+  const fsMySide = ((b?.mySide?.sideid || b?.mySide?.id || 'p1').startsWith('p2') ? 'p2' : 'p1') as ProtocolSide;
+  const myFutureSight = futureSightState[fsMySide];
+  const oppFutureSight = futureSightState[otherSide(fsMySide)];
   return {
-    sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide, req, myStreak, myVolatiles, myLastUsed, myDurations),
-    sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide, null, oppStreak, oppVolatiles, oppLastUsed, oppDurations),
+    sideOne: buildSide(myMons, myActiveIdx, myActive?.boosts, mySide, req, myStreak, myVolatiles, myLastUsed, myDurations, myFutureSight),
+    sideTwo: buildSide(oppMons, oppActiveIdx, oppActive?.boosts, farSide, null, oppStreak, oppVolatiles, oppLastUsed, oppDurations, oppFutureSight),
     weather: {
       weatherType: weather || 'none',
       // Preserve 0 (last turn of weather); only fall back to -1 when truly absent.
