@@ -101,7 +101,7 @@ _TERA_BANNED_FORMATS: frozenset[str] = frozenset({
     "gen9nationaldex",
 })
 
-# --- PIMC v2 (Phase 1: proxy fan-out) -------------------------------------
+# --- PIMC v2 proxy fan-out -------------------------------------------------
 # Feature flag. Default 0 = OFF (live behavior unchanged — single modal POST).
 # K=1 forces single-modal path (same code as K=0). K in 2..8 enables PIMC
 # fan-out: K plausible opponent teams sampled per opp mon, K full hypotheses
@@ -129,70 +129,18 @@ def _read_pimc_k_env() -> int:
 def _choose_pimc_k(
     requested_k: int, opp_pokemon: list[dict[str, Any]]
 ) -> int:
-    """Auto-tune K based on how much opp info has been revealed.
+    """Return the env-requested K.
 
-    Per the PIMC v2 scoping recommendation:
-      - K=8 in pre-reveal phase (≤2 total revealed moves across opp team)
-      - K=2 in late-game (≥5 opp slots have any reveal — moves/item/ability)
-      - K=`requested_k` (default 6 when `requested_k` >= 6) elsewhere
-
-    `requested_k` is the env-set ceiling. If env says K=4 we never auto-tune
-    above 4; if env says K=2 we never auto-tune above 2 either. This lets a
-    user lock in a low K for cost control while still allowing the proxy
-    to scale DOWN when most info is already known (cheap correctness win).
+    Auto-tune previously scaled K down by reveal phase, but live play showed
+    it dropped too aggressively. Keep this helper as the no-belief entry point
+    in case callers need the old signature; it intentionally performs no
+    phase-based scaling.
     """
     if requested_k <= 0:
         return 0
     if requested_k == 1:
         return 1
-
-    # Count revealed signal across all opp Pokemon (excluding empties).
-    total_moves_revealed = 0
-    slots_with_reveal = 0
-    for pkmn in opp_pokemon:
-        species = pkmn.get("species", "")
-        if not species or species == "none":
-            continue
-        moves = pkmn.get("moves") or []
-        # Ground-truth-revealed moves only — the modal padding has 4 slots
-        # set to chaos top-4. We can't distinguish those here without the
-        # belief tracker, so this helper is called with the per-mon belief
-        # in `apply_belief_pimc` instead. Default heuristic falls back to
-        # raw revealed_moves count from the BattleRequest's _planH metadata
-        # being passed in via the wrapper. To keep this helper pure-data,
-        # we count: any non-default slots, item != "none", ability != "none".
-        revealed_here = 0
-        for m in moves:
-            mid = m.get("id") if isinstance(m, dict) else m
-            if mid and mid != "none":
-                revealed_here += 1
-        # Note: this raw count includes the padded modal moves too. The
-        # belief-aware caller in `apply_belief_pimc` overrides this helper
-        # with a richer per-belief signal — see that function's heuristic.
-        if (pkmn.get("item") or "none") != "none":
-            slots_with_reveal += 1
-        if (pkmn.get("ability") or "none") != "none":
-            slots_with_reveal += 1
-        if pkmn.get("terastallized"):
-            slots_with_reveal += 1
-        total_moves_revealed += revealed_here
-
-    # The block above counts post-overlay padded moves so it OVER-estimates
-    # reveals. The real auto-tune happens via `_choose_pimc_k_from_belief`
-    # below — this version is a no-belief fallback for callers that don't
-    # have the tracker handy (rare).
-    # Option A (2026-05-10): auto-tune was downgrading too aggressively
-    # (K dropped to 2 by turn 1 even when env-set ceiling was 4 or higher).
-    # Disable auto-tune entirely — env value is the effective K, no scaling.
-    # The two threshold branches below are kept for reference / future
-    # re-enable but never reached.
     return requested_k
-
-    if slots_with_reveal >= 5:  # noqa: unreachable
-        return min(2, requested_k)
-    if total_moves_revealed <= 2:
-        return min(8, requested_k)
-    return min(6, requested_k)
 
 
 def _choose_pimc_k_from_belief(
@@ -200,46 +148,16 @@ def _choose_pimc_k_from_belief(
     tracker: BeliefTracker,
     opp_pokemon: list[dict[str, Any]],
 ) -> int:
-    """Auto-tune K using ground-truth reveals from the BeliefTracker.
+    """Return the env-requested K using the belief-aware call signature.
 
-    Reveal score = total revealed moves + 1 per revealed item + 1 per
-    revealed ability + 1 per terastallized mon, summed across all opp
-    Pokemon. Thresholds:
-      - 0-2 reveal points → pre-reveal → K=min(8, requested_k)
-      - 5+ reveal points → late-game  → K=min(2, requested_k)
-      - else            → mid-game   → K=min(6, requested_k)
-
-    requested_k of 0 returns 0 (PIMC off). requested_k of 1 returns 1
-    (single-modal path). 2-8 enables fan-out with auto-tune ceiling.
+    The tracker and opponent list remain parameters so callers do not need
+    to change, but K is no longer scaled by reveal phase.
     """
     if requested_k <= 0:
         return 0
     if requested_k == 1:
         return 1
-
-    points = 0
-    for pkmn in opp_pokemon:
-        species = pkmn.get("species", "")
-        if not species or species == "none":
-            continue
-        belief = tracker.get(species)
-        points += len(belief.revealed_moves)
-        if belief.revealed_item is not None:
-            points += 1
-        if belief.revealed_ability is not None:
-            points += 1
-        if belief.terastallized:
-            points += 1
-
-    # Option A (2026-05-10): auto-tune disabled — env-set ceiling IS the K.
-    # See _choose_pimc_k for rationale.
     return requested_k
-
-    if points <= 2:  # noqa: unreachable
-        return min(8, requested_k)
-    if points >= 5:
-        return min(2, requested_k)
-    return min(6, requested_k)
 
 
 def _normalize(name: str) -> str:
@@ -668,7 +586,7 @@ def apply_belief(req: dict[str, Any]) -> dict[str, Any]:
     return req
 
 
-# --- PIMC v2 Phase 1: proxy fan-out ---------------------------------------
+# --- PIMC v2 proxy fan-out -------------------------------------------------
 def _sample_one_set_for_pkmn(
     pkmn: dict[str, Any],
     tracker: BeliefTracker,
@@ -726,8 +644,7 @@ def apply_belief_pimc(req: dict[str, Any], k: int) -> dict[str, Any]:
 
     Returns a `{"hypotheses":[state1, state2, ..., stateK]}` request shape.
     Each state is a full BattleRequest with the SAME player-side data and
-    DIFFERENT sampled opp sets. The K=`k` here is the FINAL K — the caller
-    is expected to have already auto-tuned via `_choose_pimc_k_from_belief`.
+    DIFFERENT sampled opp sets. The K=`k` here is the final env-requested K.
 
     When K <= 1, falls back to `apply_belief` (single modal). When the
     request lacks `_planH` metadata or the chaos format is unresolvable,
@@ -739,8 +656,6 @@ def apply_belief_pimc(req: dict[str, Any], k: int) -> dict[str, Any]:
     to `priors.sample_set`. So if EQ is revealed for Garchomp, all K of
     Garchomp's sampled sets include EQ.
 
-    NOTE: this function is intentionally NOT wired into `analyze_stream`
-    yet — Phase 1 = code only, no behavior change. Phase 2 wires it.
     """
     if k <= 1:
         return apply_belief(req)
@@ -767,12 +682,6 @@ def apply_belief_pimc(req: dict[str, Any], k: int) -> dict[str, Any]:
     resolved_fmt = _resolve_format(fmt)
     if resolved_fmt is None:
         return apply_belief(req)
-
-    # Snapshot the request BEFORE apply_belief mutates it (it strips _planH
-    # and writes battleId / turn / teraBanned to the top level). We rebuild
-    # K hypotheses from that snapshot, so each hypothesis has the same
-    # top-level fields the engine expects.
-    base_req_snapshot = copy.deepcopy(req)
 
     # Run the standard belief pipeline ONCE on the original request:
     #  - ingests reveals into the tracker
@@ -929,20 +838,16 @@ async def _log_replay_record(req_body: dict, response_chunks: list[bytes]) -> No
 async def analyze_stream(req: Request) -> StreamingResponse:
     """Proxy endpoint: ingests BattleRequest, overlays belief, forwards to engine.
 
-    PIMC v2 Phase 1: when `POKE_PROXY_PIMC_K >= 2`, the request is fanned out
-    into K hypothesis-states using `apply_belief_pimc`. K is auto-tuned per
-    battle phase (8 pre-reveal, 6 mid-game, 2 late-game) capped at the env
-    ceiling. Default 0/1 = single-modal path (legacy behavior, bit-identical
-    to the pre-PIMC proxy).
+    When `POKE_PROXY_PIMC_K >= 2`, the request is fanned out into K
+    hypothesis-states using `apply_belief_pimc`. Default 0/1 =
+    single-modal path.
     """
     body = await req.json()
     pimc_k_env = _read_pimc_k_env()
     if pimc_k_env >= 2:
-        # Auto-tune from belief — but only if there's a tracker for this battle.
-        # First call ever for a battle has no tracker yet, so we have to do
-        # the apply_belief pipeline (which materializes one) inside
-        # apply_belief_pimc anyway. Use the requested K as the upper bound;
-        # the auto-tune helper inside apply_belief_pimc will dial it down.
+        # Preserve the helper call so the first request for a battle and later
+        # requests follow the same K-selection path. The helpers currently
+        # return the env-requested K without phase-based scaling.
         meta = (body or {}).get("_planH") or {}
         battle_id = meta.get("battleId")
         opp_pokemon = ((body or {}).get("sideTwo") or {}).get("pokemon") or []
@@ -950,7 +855,6 @@ async def analyze_stream(req: Request) -> StreamingResponse:
         if tracker is not None:
             effective_k = _choose_pimc_k_from_belief(pimc_k_env, tracker, opp_pokemon)
         else:
-            # No tracker yet → assume pre-reveal phase (highest K for safety).
             effective_k = min(8, pimc_k_env)
         body = apply_belief_pimc(body, effective_k)
     else:
