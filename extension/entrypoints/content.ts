@@ -768,6 +768,10 @@ export default defineContentScript({
       const newBanner = renderConflictBanner({
         severity: mapConflictSeverity(c.level),
         reason: c.message,
+        safeSwitches: c.safeSwitches?.map(s => ({
+          species: s.species,
+          worstDmgPct: s.worstDmgPct,
+        })),
       });
       card.insertBefore(newBanner, card.firstChild);
     }

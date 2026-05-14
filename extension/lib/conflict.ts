@@ -3,10 +3,52 @@
 import type { ThreatsReport } from './threats';
 import type { PokemonSnapshot } from './types';
 
+export type SafeSwitch = {
+  /** Species name from myTeam (display form, not normalized). */
+  species: string;
+  /** Worst (highest) damage% this mon takes from any opp-active onField move. */
+  worstDmgPct: number;
+};
+
 export type ConflictWarning = {
   level: 'strong' | 'warn' | 'pivot' | 'info';
   message: string;
+  /**
+   * Non-OHKO switch targets ranked safest-first. Empty when every benchmon
+   * is also OHKO'd or there's no usable threat data. Populated for strong /
+   * warn / pivot conflicts so the user has an immediate "switch to this"
+   * answer instead of having to manually scan the threats panel.
+   */
+  safeSwitches?: SafeSwitch[];
 };
+
+/**
+ * Rank non-active, non-fainted bench mons by worst-case damage from the
+ * opp's currently-active threats. Excludes any mon taking ≥100% (OHKO).
+ * Returns up to `topN` survivors, lowest damage first.
+ */
+export function computeSafeSwitches(
+  threats: ThreatsReport,
+  myActive: PokemonSnapshot,
+  myTeam: PokemonSnapshot[],
+  topN: number = 3,
+): SafeSwitch[] {
+  const candidates = myTeam.filter(
+    p => p.species !== myActive.species && (p.hp ?? 1) > 0,
+  );
+  const ranked: SafeSwitch[] = candidates.map(p => {
+    let worst = 0;
+    for (const t of threats.onField) {
+      const v = t.victims.find(v => v.species === p.species);
+      if (v && v.dmgPct > worst) worst = v.dmgPct;
+    }
+    return { species: p.species, worstDmgPct: worst };
+  });
+  return ranked
+    .filter(s => s.worstDmgPct < 100)
+    .sort((a, b) => a.worstDmgPct - b.worstDmgPct)
+    .slice(0, topN);
+}
 
 export function detectConflict(opts: {
   engineRecommendation: { move: string; isSwitch: boolean; switchTarget?: string };
@@ -15,7 +57,7 @@ export function detectConflict(opts: {
   oppActive: PokemonSnapshot;
   myTeam: PokemonSnapshot[];
 }): ConflictWarning | null {
-  const { engineRecommendation: rec, threats, myActive, oppActive } = opts;
+  const { engineRecommendation: rec, threats, myActive, oppActive, myTeam } = opts;
 
   // Find the worst threat from opp's active mon vs my active
   const onFieldVsMe = threats.onField
@@ -29,6 +71,7 @@ export function detectConflict(opts: {
     return {
       level: 'strong',
       message: `STRONG CONFLICT: ${oppActive.species} ${worst.t.oppMove} guaranteed OHKO ${myActive.species}. Engine may not see this.`,
+      safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
     };
   }
 
@@ -37,6 +80,7 @@ export function detectConflict(opts: {
     return {
       level: 'warn',
       message: `POSSIBLE CONFLICT: ${oppActive.species} ${worst.t.oppMove} OHKOs ${myActive.species}; speed tier unclear (Scarf?).`,
+      safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
     };
   }
 
@@ -49,6 +93,7 @@ export function detectConflict(opts: {
       return {
         level: 'pivot',
         message: `PIVOT WARNING: switching to ${rec.switchTarget} — ${oppActive.species} OHKOs it too. Pick a different switch.`,
+        safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
       };
     }
   }

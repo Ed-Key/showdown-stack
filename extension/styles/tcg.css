@@ -157,6 +157,34 @@
   letter-spacing: 0.1em; font-size: 10px;
   color: #ffe898; display: block; margin-bottom: 2px;
 }
+/* Safe-switch chip row — answers "ok, who do I bring out instead?" */
+.sc-conflict-banner .safe-switches {
+  margin-top: 6px;
+  display: flex; flex-wrap: wrap; gap: 4px 6px;
+  align-items: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-style: normal;
+}
+.sc-conflict-banner .safe-switches-label {
+  font-size: 10px; font-weight: 700;
+  color: #ffe898; letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+.sc-conflict-banner .safe-switch-chip {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 232, 152, 0.35);
+  border-radius: 10px;
+  font-size: 10.5px; font-weight: 600;
+  color: #fff;
+  letter-spacing: 0.03em;
+}
+.sc-conflict-banner .safe-switch-chip em {
+  font-style: normal; font-weight: 500;
+  color: #ffd9a8; font-size: 9.5px;
+}
 
 /* ───────── TCG CARD ───────── */
 .sc-tcg-wrap {
