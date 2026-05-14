@@ -21,16 +21,27 @@ export interface AlternativeMove {
 }
 
 export interface TcgCardProps {
-  recommendedMove: string;
-  moveType: string;
+  /** Showdown primary type of the active Pokemon — drives the frame color. */
+  activeType: string;
   trend: TrendArrow;
+  /** Pokemon currently on your side of the field. */
   activeSpecies: string;
+  /**
+   * Pokemon shown in the top header strip + art frame: defaults to
+   * activeSpecies, but swaps to the switch target when the engine
+   * recommends a switch (so the user sees who they're being asked to bring
+   * in). When isSwitchRec is true, this is the target species.
+   */
+  headerSpecies: string;
+  /** True when bestMove is a Pokemon name (switch), not a move. */
+  isSwitchRec: boolean;
   turn: number;
   trendTag: string;
   hypsTag: string;
   winPct: number;
   llmExplanation: string;
-  alternatives: AlternativeMove[];
+  /** Includes the recommended move as the first entry (isRecommended:true). */
+  moves: AlternativeMove[];
   worstThreat: { name: string; dmgPct: number; isOhko: boolean };
   retreatCost: number;
   /** Win% history (0-1 scale) for sparkline */
@@ -106,29 +117,34 @@ function formatFooter(turn: number): { left: string; right: string } {
 }
 
 export function renderTcgCard(p: TcgCardProps): HTMLElement {
-  const tcgType = TCG_TYPE_MAP[p.moveType] ?? 'colorless';
+  // Frame color follows the active Pokemon's primary type (real-TCG behavior):
+  // stays put until you switch, instead of jumping every turn with the
+  // recommendation. Per-move orb colors still reflect each move's own type.
+  const tcgType = TCG_TYPE_MAP[p.activeType] ?? 'colorless';
   const card = document.createElement('div');
   card.className = `sc-tcg-card t-${tcgType}`;
 
-  const spriteURL = speciesToSpriteURL(p.activeSpecies);
+  // Active sprite drives the art frame; header sprite swaps to the switch
+  // target when the engine recommends a switch (so the user sees who's
+  // coming in at a glance) and otherwise mirrors the active Pokemon.
+  const activeSpriteURL = speciesToSpriteURL(p.activeSpecies);
+  const headerSpriteURL = speciesToSpriteURL(p.headerSpecies);
   const deltaStr = p.trend.delta >= 0 ? `+${p.trend.delta}` : `${p.trend.delta}`;
   const footer = formatFooter(p.turn);
-
-  // Build "type pip" character for the pip element
-  const pipChar = p.flairChar || '◆';
+  const stageLabel = p.isSwitchRec ? `SWITCH TO · T${p.turn}` : `ACTIVE · T${p.turn}`;
 
   const html = `
     <div class="inner">
       <div class="top">
-        <div class="poke-mini"><img alt="active" src="${spriteURL}"/></div>
+        <div class="poke-mini"><img alt="header" src="${headerSpriteURL}"/></div>
         <div class="name-wrap">
-          <div class="stage-label">RECOMMENDED · T${p.turn}</div>
-          <div class="card-name">${escapeHtml(p.recommendedMove)}</div>
+          <div class="stage-label">${stageLabel}</div>
+          <div class="card-name">${escapeHtml((p.headerSpecies || '').toUpperCase())}</div>
         </div>
         <div class="trend-slot">
           <span class="trend-arrow" style="color:${p.trend.color}">${p.trend.arrow}</span>
           <span class="trend-delta" style="color:${p.trend.color}">${deltaStr}</span>
-          <div class="type-pip">${pipChar}</div>
+          <span class="type-pip-slot"></span>
         </div>
       </div>
       <div class="art-outer">
@@ -142,7 +158,7 @@ export function renderTcgCard(p: TcgCardProps): HTMLElement {
           <span class="flair" style="bottom:50px;left:12px;font-size:14px;animation-delay:-2.5s">${p.flairChar}</span>
           <span class="flair" style="top:70px;left:70%;font-size:12px;animation-delay:-3.5s">${p.flairChar}</span>
           <span class="flair" style="bottom:80px;right:24px;font-size:16px;animation-delay:-4s">${p.flairChar}</span>
-          <div class="sprite-stage"><img alt="" src="${spriteURL}"/></div>
+          <div class="sprite-stage"><img alt="" src="${activeSpriteURL}"/></div>
           <div class="spark-strip">
             <span class="spark-slot"></span>
             <div class="big-conf">${p.winPct}<span class="pct">%</span></div>
@@ -182,10 +198,21 @@ export function renderTcgCard(p: TcgCardProps): HTMLElement {
     sparkSlot.replaceWith(spark);
   }
 
-  // Build the .moves rows
+  // Type pip in the header trend-slot uses the same energy orb asset as the
+  // move rows (e.g. Gholdengo → Metal energy card crop), so the top-right
+  // matches the per-row orbs visually.
+  const pipSlot = card.querySelector('.type-pip-slot') as HTMLElement | null;
+  if (pipSlot) {
+    const orb = buildOrb(tcgType, true);
+    orb.classList.add('type-pip');
+    pipSlot.replaceWith(orb);
+  }
+
+  // Build the .moves rows — recommended move is moves[0], rendered with .rec
+  // highlight; the remaining rows are the engine's top alternatives.
   const movesDiv = card.querySelector('.moves')!;
-  for (const alt of p.alternatives) {
-    movesDiv.appendChild(buildMoveRow(alt));
+  for (const m of p.moves) {
+    movesDiv.appendChild(buildMoveRow(m));
   }
 
   return card;

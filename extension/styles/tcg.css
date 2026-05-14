@@ -236,11 +236,10 @@
   letter-spacing: -0.02em;
 }
 .sc-tcg-card .type-pip {
-  width: 22px; height: 22px; border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.7), var(--t-dark) 60%, var(--t-deep) 100%);
-  display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 12px; margin-left: 3px;
-  box-shadow: inset 0 -1px 2px rgba(0,0,0,0.3);
+  /* Energy-orb sizing + image come from the .energy class (orb is built via
+     buildOrb at render time). This rule only positions the pip inside the
+     trend-slot. */
+  margin-left: 3px;
 }
 
 /* ART FRAME */
@@ -282,6 +281,14 @@
   letter-spacing: 0.14em;
   background: rgba(0,0,0,0.55); padding: 2px 7px; border-radius: 2px;
   backdrop-filter: blur(2px);
+}
+.sc-tcg-card .art-tag-trend {
+  display: inline-flex; gap: 3px; align-items: center;
+  letter-spacing: 0.06em;
+}
+.sc-tcg-card .art-tag-trend .trend-arrow,
+.sc-tcg-card .art-tag-trend .trend-delta {
+  font-size: 10px; font-weight: 800;
 }
 .sc-tcg-card .spark-strip {
   position: absolute; bottom: 0; left: 0; right: 0;
@@ -445,6 +452,16 @@
   padding: 2px 5px; border-radius: 2px;
 }
 .sc-trainer-card .trainer-body { padding: 6px 11px 8px; }
+.sc-trainer-card.collapsed .trainer-body { display: none; }
+.sc-pv-card.collapsed .pv-chain { display: none; }
+.sc-collapse-chevron {
+  margin-left: 6px; color: rgba(255,255,255,0.55);
+  font-size: 9px; user-select: none;
+}
+.sc-trainer-card .trainer-header,
+.sc-pv-card .pv-header {
+  user-select: none;
+}
 .sc-trainer-card .section-label {
   font-family: 'JetBrains Mono', monospace;
   color: rgba(42,26,10,0.6);

@@ -23,6 +23,7 @@ import {
   type Trend,
 } from '../lib/val-trend';
 import { renderTcgCard, type TcgCardProps, type AlternativeMove } from '../panels/tcg-card';
+import { getMoveType, getPokemonPrimaryType, isSwitchOption } from '../lib/showdown-dex';
 import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
 import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
 import { renderPvChain, type PvStep } from '../panels/pv-chain';
@@ -62,6 +63,18 @@ export default defineContentScript({
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
     panel.id = 'sc-panel';
+    panel.classList.add('sc-panel-v2');
+    // Force scroll + sizing to win over legacy #sc-panel CSS via setProperty('important').
+    // Proper fix: dedupe legacy chrome rules into tcg.css. Tracked for follow-up.
+    panel.style.setProperty('width', '360px', 'important');
+    panel.style.setProperty('max-height', 'calc(100vh - 32px)', 'important');
+    panel.style.setProperty('overflow-y', 'auto', 'important');
+    panel.style.setProperty('overflow-x', 'hidden', 'important');
+    panel.style.setProperty('position', 'fixed', 'important');
+    panel.style.setProperty('top', '16px', 'important');
+    panel.style.setProperty('right', '16px', 'important');
+    panel.style.setProperty('bottom', 'auto', 'important');
+    panel.style.setProperty('z-index', '999999', 'important');
     panel.innerHTML = `
       <div class="sc-pinned">
         <div class="sc-header">Copilot — idle</div>
@@ -117,9 +130,13 @@ export default defineContentScript({
          "Copilot — idle" first paint has something to swap out) but it's
          replaced by the TCG card on the first engine update and never
          restyled afterward; its CSS rule is dead weight. */
-      #sc-panel .sc-stats { font-size: 11px; color: #888; margin-bottom: 6px; }
-      #sc-panel .sc-pv { font-size: 11px; color: #ddd; margin-bottom: 4px; word-break: break-word; }
-      #sc-panel .sc-alts { font-size: 11px; color: #ccc; word-break: break-word; }
+      /* Legacy text slots — superseded by TCG card + threats/PV panels.
+         Hidden because legacy code still writes to them; we keep the
+         elements so .querySelector! assertions don't blow up. */
+      #sc-panel .sc-stats,
+      #sc-panel .sc-pv,
+      #sc-panel .sc-alts,
+      #sc-panel .sc-pimc-pinned { display: none !important; }
       #sc-panel .sc-notes-header {
         font-size: 11px; color: #fc6; margin-top: 8px; cursor: pointer;
         border-top: 1px dashed #333; padding-top: 6px;
@@ -327,6 +344,41 @@ export default defineContentScript({
         o.classList.add('hidden');
         o.style.display = 'none';
       }
+    }
+
+    /**
+     * Make a panel collapsible: clicking the header toggles `.collapsed` on
+     * the root, which CSS uses to hide the body. State persists per user via
+     * localStorage so the preference survives turn re-renders and reloads.
+     */
+    function attachPanelToggle(root: HTMLElement, headerSelector: string, storageKey: string): void {
+      const header = root.querySelector<HTMLElement>(headerSelector);
+      if (!header) return;
+      const stored = (() => {
+        try { return localStorage.getItem(storageKey) === '1'; } catch { return false; }
+      })();
+      if (stored) root.classList.add('collapsed');
+
+      // Add a small visual chevron at the end of the header so the user
+      // knows it's interactive (without burning a slot for a separate button).
+      let chevron = header.querySelector<HTMLElement>('.sc-collapse-chevron');
+      if (!chevron) {
+        chevron = document.createElement('span');
+        chevron.className = 'sc-collapse-chevron';
+        header.appendChild(chevron);
+      }
+      const syncChevron = () => {
+        chevron!.textContent = root.classList.contains('collapsed') ? '▸' : '▾';
+      };
+      syncChevron();
+
+      header.style.cursor = 'pointer';
+      header.addEventListener('click', () => {
+        const nowCollapsed = !root.classList.contains('collapsed');
+        root.classList.toggle('collapsed', nowCollapsed);
+        try { localStorage.setItem(storageKey, nowCollapsed ? '1' : '0'); } catch { /* ignore */ }
+        syncChevron();
+      });
     }
 
     // Map legacy ConflictWarning.level → ConflictBanner severity. The new
@@ -981,24 +1033,82 @@ export default defineContentScript({
       // The engine update does not surface move-type — default to Normal so
       // the energy palette falls back to colorless. Tasks 8+ can wire a move
       // → type lookup via Dex if needed.
-      const recommendedMoveType = (u.moveType as string | undefined) ?? 'Normal';
-      const alternatives: AlternativeMove[] = (u.alternatives ?? [])
+      // Frame color follows the active Pokemon's primary type (Showdown dex
+      // lookup, falls back to 'Normal' when the dex isn't loaded yet).
+      const activeType = getPokemonPrimaryType(activeSpecies);
+
+      // Tally per-move votes from pimcBreakdown (one record per hypothesis,
+      // each with `top_move`). Old panels/pimc-vote-bar.ts did this; the new
+      // TCG card needs the same data on each move to fill its orbs.
+      // voteCap is breakdown.length so partial fanouts (3/4 HYPS etc.) render
+      // correctly. Falls back to 0 votes / 4 cap when no breakdown is present.
+      const breakdown = Array.isArray(u?.pimcBreakdown) ? u.pimcBreakdown : [];
+      const voteCap = breakdown.length || 4;
+      const voteTally = new Map<string, number>();
+      for (const h of breakdown) {
+        const m = typeof h?.top_move === 'string' ? h.top_move : '';
+        if (m) voteTally.set(m, (voteTally.get(m) ?? 0) + 1);
+      }
+      const lookupVotes = (moveName: string): number => {
+        if (!moveName) return 0;
+        if (voteTally.has(moveName)) return voteTally.get(moveName)!;
+        // Engine returns canonical move IDs (lowercase, no spaces) on some
+        // paths and display names on others. Try a normalized match too.
+        const norm = moveName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        for (const [k, v] of voteTally) {
+          if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === norm) return v;
+        }
+        return 0;
+      };
+
+      // Build the moves list: recommended first (highlighted .rec row),
+      // then up to 4 alternatives. Per-move type comes from the Showdown
+      // dex so orb colors reflect each move's actual element.
+      const bestMoveName = String(u.bestMove ?? '');
+      const recommendedMove: AlternativeMove | null = bestMoveName
+        ? {
+            name: bestMoveName,
+            type: getMoveType(bestMoveName),
+            votes: lookupVotes(bestMoveName),
+            voteCap,
+            winPct: Math.round((u.confidence ?? 0) * 100),
+            category: 'P',
+            isRecommended: true,
+            desc: '',
+          }
+        : null;
+
+      const altsFromUpdate: AlternativeMove[] = (u.alternatives ?? [])
+        .filter((a: any) => (a.move ?? a.name) !== bestMoveName)
         .slice(0, 4)
-        .map((a: any) => ({
-          name: String(a.move ?? a.name ?? ''),
-          type: (a.type as string | undefined) ?? 'Normal',
-          votes: typeof a.votes === 'number' ? a.votes : 0,
-          voteCap: 4,
-          winPct: Math.round((a.confidence ?? 0) * 100),
-          category: ((a.category as string | undefined) ?? 'P') as 'P' | 'S' | 'T',
-          isRecommended: (a.move ?? a.name) === u.bestMove,
-          desc: String(a.desc ?? ''),
-        }));
+        .map((a: any) => {
+          const name = String(a.move ?? a.name ?? '');
+          return {
+            name,
+            type: (a.type as string | undefined) ?? getMoveType(name),
+            votes: typeof a.votes === 'number' ? a.votes : lookupVotes(name),
+            voteCap,
+            winPct: Math.round((a.confidence ?? 0) * 100),
+            category: ((a.category as string | undefined) ?? 'P') as 'P' | 'S' | 'T',
+            isRecommended: false,
+            desc: String(a.desc ?? ''),
+          };
+        });
+
+      const moves: AlternativeMove[] = recommendedMove
+        ? [recommendedMove, ...altsFromUpdate]
+        : altsFromUpdate;
+      // Header shows the switch target when the engine recommends a switch,
+      // otherwise mirrors the active Pokemon.
+      const switchRec = isSwitchOption(bestMoveName);
+      const headerSpecies = switchRec ? bestMoveName : activeSpecies;
+
       return {
-        recommendedMove: String(u.bestMove ?? ''),
-        moveType: recommendedMoveType,
+        activeType,
         trend,
         activeSpecies,
+        headerSpecies,
+        isSwitchRec: switchRec,
         turn: battle?.turn ?? 0,
         trendTag: `${trend.arrow} LAST 3`,
         hypsTag: Array.isArray(u?.pimcBreakdown) && u.pimcBreakdown.length > 0
@@ -1006,11 +1116,11 @@ export default defineContentScript({
           : 'SINGLE',
         winPct: Math.round((u.confidence ?? 0) * 100),
         llmExplanation: llmExplanation || 'Analyzing turn…',
-        alternatives,
+        moves,
         worstThreat,
         retreatCost: 2,
         sparklineHistory: valHistory,
-        flairChar: flairByType[recommendedMoveType] ?? '◆',
+        flairChar: flairByType[activeType] ?? '◆',
       };
     }
 
@@ -1136,10 +1246,14 @@ export default defineContentScript({
         if (oldThreats) {
           oldThreats.replaceWith(newThreats);
         } else if (tcgCard && tcgCard.parentElement) {
-          tcgCard.parentElement.insertBefore(newThreats, tcgCard.nextSibling);
+          // Mount ABOVE the TCG card so the "what's about to kill you"
+          // signal is the first thing the user sees — threats are the
+          // emergency layer; the recommendation comes after.
+          tcgCard.parentElement.insertBefore(newThreats, tcgCard);
         } else {
           panel.appendChild(newThreats);
         }
+        attachPanelToggle(newThreats, '.trainer-header', 'sc-threats-collapsed');
       }
 
       // ---- PV chain (Task 11) --------------------------------------------
@@ -1167,6 +1281,7 @@ export default defineContentScript({
           } else {
             panel.appendChild(newPv);
           }
+          attachPanelToggle(newPv, '.pv-header', 'sc-pv-collapsed');
         }
       }
 

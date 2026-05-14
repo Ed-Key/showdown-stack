@@ -5,16 +5,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { renderTcgCard, type TcgCardProps } from '../../panels/tcg-card';
 
 const FIXTURE: TcgCardProps = {
-  recommendedMove: 'Ice Spinner',
-  moveType: 'Ice',
+  activeType: 'Fairy',
   trend: { arrow: '↗', delta: 8, color: '#1a7a2a', direction: 'rising' },
   activeSpecies: 'Iron Valiant',
+  headerSpecies: 'Iron Valiant',
+  isSwitchRec: false,
   turn: 14,
   trendTag: '▲ LAST 3 TURNS',
   hypsTag: '3/4 HYPS',
   winPct: 73,
   llmExplanation: 'OHKOs Samurott-Hisui and removes the terrain.',
-  alternatives: [
+  moves: [
     { name: 'Ice Spinner', type: 'Ice', votes: 3, voteCap: 4, winPct: 73, category: 'P', isRecommended: true, desc: 'OHKOs Samurott-H' },
     { name: 'Moonblast', type: 'Fairy', votes: 1, voteCap: 4, winPct: 58, category: 'S', isRecommended: false, desc: 'trades into Iron V' },
   ],
@@ -36,21 +37,39 @@ describe('renderTcgCard', () => {
     expect(el.classList.contains('sc-tcg-card')).toBe(true);
   });
 
-  it('applies the type class derived from moveType', () => {
+  it('applies the type class derived from activeType (active Pokemon primary type)', () => {
     const el = renderTcgCard(FIXTURE);
-    // Ice → water in TCG mapping
-    expect(el.classList.contains('t-water')).toBe(true);
+    // Fairy stays Fairy in TCG mapping
+    expect(el.classList.contains('t-fairy')).toBe(true);
   });
 
-  it('renders the move name', () => {
+  it('renders the recommended move as the first row in the moves list', () => {
     const el = renderTcgCard(FIXTURE);
-    expect(el.querySelector('.card-name')?.textContent).toBe('Ice Spinner');
+    const firstMove = el.querySelector('.move');
+    expect(firstMove?.classList.contains('rec')).toBe(true);
+    expect(firstMove?.textContent).toContain('Ice Spinner');
   });
 
   it('renders the trend arrow and delta', () => {
     const el = renderTcgCard(FIXTURE);
     expect(el.querySelector('.trend-arrow')?.textContent).toBe('↗');
     expect(el.querySelector('.trend-delta')?.textContent).toBe('+8');
+  });
+
+  it('shows the active Pokemon name in the top header by default', () => {
+    const el = renderTcgCard(FIXTURE);
+    expect(el.querySelector('.card-name')?.textContent).toBe('IRON VALIANT');
+    expect(el.querySelector('.stage-label')?.textContent).toContain('ACTIVE');
+  });
+
+  it('swaps header to the switch target when isSwitchRec is true', () => {
+    const el = renderTcgCard({
+      ...FIXTURE,
+      headerSpecies: 'Volcarona',
+      isSwitchRec: true,
+    });
+    expect(el.querySelector('.card-name')?.textContent).toBe('VOLCARONA');
+    expect(el.querySelector('.stage-label')?.textContent).toContain('SWITCH TO');
   });
 
   it('renders the win % in the spark strip', () => {
