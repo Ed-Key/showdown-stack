@@ -85,15 +85,13 @@ function mountPv(panel: HTMLElement, pv: HTMLElement) {
 }
 
 function mountConflict(panel: HTMLElement, banner: HTMLElement) {
-  mountOrReplace(panel, {
-    newEl: banner,
-    replaceTargets: ['.sc-conflict-banner'],
-    anchors: [
-      { selector: '.sc-status-overlay', position: 'before' },
-      { selector: '.sc-tcg-card', position: 'before' },
-    ],
-    fallback: (root, el) => root.insertBefore(el, root.firstChild),
-  });
+  // Banner is now an inside-the-TCG-card child, mounted as first child of
+  // .sc-tcg-card. Any previous instance (whether inside or top-level) is
+  // stripped first. Returns silently if no TCG card exists yet.
+  panel.querySelector('.sc-conflict-banner')?.remove();
+  const card = panel.querySelector<HTMLElement>('.sc-tcg-card');
+  if (!card) return;
+  card.insertBefore(banner, card.firstChild);
 }
 
 function panelOrder(panel: HTMLElement): string[] {
@@ -127,18 +125,18 @@ describe('panel mount sequence — first engine update', () => {
     expect(panelOrder(panel)).toEqual(['sc-trainer-card', 'sc-pv-card', 'sc-tcg-card']);
   });
 
-  it('conflict banner mounts above TCG card (and below threats + PV)', () => {
-    // This codifies the current behavior. The conflict insert logic targets
-    // .sc-tcg-card.previousSibling (which is .sc-pv-card after PV mounts).
-    // If/when Phase 5 changes the intent to "conflict at very top", this
-    // test must change too.
+  it('conflict banner mounts INSIDE the TCG card as its first child', () => {
     mountTcgCard(panel, renderTcgCard(TCG_FIXTURE));
     mountThreats(panel, renderThreatsPanel(THREATS_FIXTURE));
     mountPv(panel, renderPvChain(PV_FIXTURE));
     mountConflict(panel, renderConflictBanner({ severity: 'STRONG', reason: 'r' }));
+    // Tree-order traversal: threats → PV → TCG card → its banner child.
     expect(panelOrder(panel)).toEqual([
-      'sc-trainer-card', 'sc-pv-card', 'sc-conflict-banner', 'sc-tcg-card',
+      'sc-trainer-card', 'sc-pv-card', 'sc-tcg-card', 'sc-conflict-banner',
     ]);
+    // Banner is actually a child of the TCG card, not a sibling.
+    const card = panel.querySelector('.sc-tcg-card')!;
+    expect(card.querySelector(':scope > .sc-conflict-banner')).not.toBeNull();
   });
 });
 
@@ -153,13 +151,21 @@ describe('panel mount sequence — subsequent engine updates', () => {
     mountConflict(panel, renderConflictBanner({ severity: 'STRONG', reason: 'r' }));
   });
 
-  it('TCG card replace preserves overall ordering', () => {
+  it('TCG card replace discards the inside-card conflict banner (re-mount required)', () => {
+    // Banner is a child of the TCG card, so swapping the card removes it.
+    // Production code handles this by calling renderConflict() after
+    // renderUpdate() on every engine tick, so the banner is re-attached
+    // immediately when there's still a conflict to surface.
     mountTcgCard(panel, renderTcgCard({ ...TCG_FIXTURE, turn: 15 }));
     expect(panelOrder(panel)).toEqual([
-      'sc-trainer-card', 'sc-pv-card', 'sc-conflict-banner', 'sc-tcg-card',
+      'sc-trainer-card', 'sc-pv-card', 'sc-tcg-card',
     ]);
-    // Exactly one TCG card (no duplicates from the replace).
     expect(panel.querySelectorAll('.sc-tcg-card').length).toBe(1);
+    // Re-mount the banner — it should land back inside the fresh card.
+    mountConflict(panel, renderConflictBanner({ severity: 'STRONG', reason: 'r' }));
+    expect(panelOrder(panel)).toEqual([
+      'sc-trainer-card', 'sc-pv-card', 'sc-tcg-card', 'sc-conflict-banner',
+    ]);
   });
 
   it('threats panel replace preserves overall ordering', () => {
@@ -168,7 +174,7 @@ describe('panel mount sequence — subsequent engine updates', () => {
       incoming: [],
     }));
     expect(panelOrder(panel)).toEqual([
-      'sc-trainer-card', 'sc-pv-card', 'sc-conflict-banner', 'sc-tcg-card',
+      'sc-trainer-card', 'sc-pv-card', 'sc-tcg-card', 'sc-conflict-banner',
     ]);
     expect(panel.querySelectorAll('.sc-trainer-card').length).toBe(1);
   });
@@ -176,7 +182,7 @@ describe('panel mount sequence — subsequent engine updates', () => {
   it('conflict banner replace preserves overall ordering', () => {
     mountConflict(panel, renderConflictBanner({ severity: 'POSSIBLE', reason: 'new' }));
     expect(panelOrder(panel)).toEqual([
-      'sc-trainer-card', 'sc-pv-card', 'sc-conflict-banner', 'sc-tcg-card',
+      'sc-trainer-card', 'sc-pv-card', 'sc-tcg-card', 'sc-conflict-banner',
     ]);
     expect(panel.querySelectorAll('.sc-conflict-banner').length).toBe(1);
   });
@@ -197,13 +203,14 @@ describe('panel mount — degraded fixtures', () => {
     expect(panel.querySelector('.sc-trainer-card')).not.toBeNull();
   });
 
-  it('conflict banner falls back to panel.insertBefore when no TCG card', () => {
+  it('conflict banner is dropped when no TCG card exists to host it', () => {
+    // The banner has no meaningful position without the recommendation it
+    // warns about — there's no fallback mount site.
     const panel = document.createElement('div');
     const child = document.createElement('div');
     child.className = 'placeholder';
     panel.appendChild(child);
     mountConflict(panel, renderConflictBanner({ severity: 'STRONG', reason: 'r' }));
-    // Inserted before the first child of panel.
-    expect(panel.firstElementChild?.classList.contains('sc-conflict-banner')).toBe(true);
+    expect(panel.querySelector('.sc-conflict-banner')).toBeNull();
   });
 });

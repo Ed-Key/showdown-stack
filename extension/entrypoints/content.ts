@@ -754,27 +754,22 @@ export default defineContentScript({
     }
 
     function renderConflict(c: ConflictWarning | null) {
-      // Legacy .sc-conflict line stays hidden — the new banner above the
-      // TCG card is the single source of truth post-Task 11.
+      // Legacy .sc-conflict line stays hidden.
       conflictEl.style.display = 'none';
 
-      const conflictProps: ConflictBannerProps | null = c
-        ? { severity: mapConflictSeverity(c.level), reason: c.message }
-        : null;
-      const newBanner = renderConflictBanner(conflictProps);
-      // Insert above the status overlay if present, else above the TCG
-      // card. Both live inside .sc-pinned so the banner stays attached
-      // to the recommendation cluster. If neither exists yet, prepend to
-      // the panel itself (banner stays the topmost child).
-      mountOrReplace(panel, {
-        newEl: newBanner,
-        replaceTargets: ['.sc-conflict-banner'],
-        anchors: [
-          { selector: '.sc-status-overlay', position: 'before' },
-          { selector: '.sc-tcg-card', position: 'before' },
-        ],
-        fallback: (root, el) => root.insertBefore(el, root.firstChild),
+      // Banner mounts INSIDE the TCG card (as first child) so it's visually
+      // attached to the recommendation it warns about, rather than being a
+      // floating sibling. Strip any previous banner (either inside the card
+      // now, or as the old top-level sibling) before inserting the new one.
+      panel.querySelector('.sc-conflict-banner')?.remove();
+      const card = panel.querySelector<HTMLElement>('.sc-tcg-card');
+      if (!c || !card) return;
+
+      const newBanner = renderConflictBanner({
+        severity: mapConflictSeverity(c.level),
+        reason: c.message,
       });
+      card.insertBefore(newBanner, card.firstChild);
     }
 
     // Detect whether the engine's bestMove string is a switch (species name) or
@@ -1122,14 +1117,15 @@ export default defineContentScript({
     // ---- engine call with native fetch streaming ------------------------
     let abortCtrl: AbortController | null = null;
 
-    // When forceSwitch is true, the engine's bestMove may be a move like
-    // "THUNDERPUNCH" that the user can't legally pick — Showdown only accepts
-    // a Pokemon. Filter engine response to switches; if engine surfaced no
-    // switches in its top-K, show plain-text "manual pick required" guidance
-    // (Stage 2 will replace this with damage-matrix-driven recommendation).
-    function applyForceSwitchOverride(u: any) {
+    // Force-switch resolver. When Showdown demands a Pokemon (forceSwitch
+    // rqid) the engine's bestMove may still be a move like "THUNDERPUNCH"
+    // the user can't legally pick — scan bestMove + alternatives for the
+    // first one that matches a team-species name and return it. Returns
+    // null when the engine's top-K contains no switches; callers fall back
+    // to the status-overlay "manual pick required" path.
+    function findForceSwitchTarget(u: any): string | null {
       const b = win.app?.curRoom?.battle;
-      if (!b) return;
+      if (!b) return null;
       const myTeam = b.myPokemon || [];
       const findSpecies = (moveStr: string): string | null => {
         if (!moveStr) return null;
@@ -1141,34 +1137,56 @@ export default defineContentScript({
         }
         return null;
       };
-      const allPicks = [
-        { move: u.bestMove, confidence: u.confidence || 0 },
-        ...((u.alternatives || []).map((a: any) => ({ move: a.move, confidence: a.confidence || 0 }))),
+      const picks = [
+        u.bestMove,
+        ...((u.alternatives || []).map((a: any) => a.move)),
       ];
-      const switchesFromEngine = allPicks
-        .map((p: any) => ({ species: findSpecies(p.move), confidence: p.confidence }))
-        .filter((s: any) => s.species);
-      if (switchesFromEngine.length) {
-        const best = switchesFromEngine[0];
-        hdrEl.textContent = 'Copilot — force switch';
-        showStatusOverlay(`FORCE SWITCH: → ${best.species}  ▲ ${pct(best.confidence)}`, 'info');
-        altsEl.textContent = switchesFromEngine.slice(1, 4)
-          .map((s: any) => `→ ${s.species} ${pct(s.confidence)}`)
-          .join(' | ') || '—';
-        statsEl.textContent = 'engine-ranked switch';
-        return;
+      for (const move of picks) {
+        const species = findSpecies(move);
+        if (species) return species;
       }
-      // Engine had no switch in top-K. Show plain-text guidance.
-      hdrEl.textContent = 'Copilot — force switch (engine returned no switch)';
-      showStatusOverlay('FORCE SWITCH: — manual pick required', 'info');
-      statsEl.textContent = 'engine top-K had only moves; matrix card may help';
+      return null;
     }
 
-    // Test hook: lets the controller synthetically trigger the force-switch
-    // override from the console/MCP without waiting for a live force switch.
-    (win as any).__scTestForceSwitch = (u: any) => applyForceSwitchOverride(u);
+    // Rewrite a force-switch engine response so the TCG card's native
+    // isSwitchRec path renders the recommendation: bestMove becomes the
+    // species name, parseRecommendation downstream flags it as a switch,
+    // and the card header flips to "SWITCH TO · T<n>". Returns null when
+    // the engine surfaced no switches (caller falls back to status overlay).
+    function rewriteForForceSwitch(u: any): any | null {
+      const target = findForceSwitchTarget(u);
+      if (!target) return null;
+      return { ...u, bestMove: target };
+    }
+
+    // Test hook: synthetically trigger the force-switch flow from the console
+    // / MCP without waiting for a live forceSwitch rqid.
+    (win as any).__scTestForceSwitch = (u: any) => {
+      const rewritten = rewriteForForceSwitch(u);
+      if (rewritten) {
+        renderUpdate(rewritten);
+      } else {
+        hdrEl.textContent = 'Copilot — force switch (engine returned no switch)';
+        showStatusOverlay('FORCE SWITCH: — manual pick required', 'info');
+      }
+    };
 
     function handleEngineUpdate(u: any, record: DecisionRecord | null) {
+      // Force-switch rewrite. When Showdown requires a Pokemon, replace the
+      // engine's (possibly-illegal) bestMove with the top-ranked switch
+      // target species *before* the TCG card consumes it — parseRecommendation
+      // sees a team-species, flips isSwitchRec=true, and the card renders
+      // "SWITCH TO · T<n>" natively. Falls back to status overlay only when
+      // the engine's top-K had no switches at all.
+      if (record?.forceSwitch && u.bestMove && !u.error) {
+        const rewritten = rewriteForForceSwitch(u);
+        if (rewritten) {
+          u = rewritten;
+        } else {
+          hdrEl.textContent = 'Copilot — force switch (engine returned no switch)';
+          showStatusOverlay('FORCE SWITCH: — manual pick required', 'info');
+        }
+      }
       renderUpdate(u);
       // Conflict warning: compare engine recommendation against threats report.
       if (u.event === 'final' && lastThreats) {
@@ -1280,10 +1298,9 @@ export default defineContentScript({
       if (u.event === 'final' || u.error) {
         record.final = u;
         record.tEndMs = Date.now();
-        // Force-switch post-processing: panel must recommend a Pokemon.
-        if (record.forceSwitch && u.bestMove && !u.error) {
-          applyForceSwitchOverride(u);
-        }
+        // Force-switch handling now runs at the top of handleEngineUpdate
+        // (rewriteForForceSwitch) so the TCG card renders the switch target
+        // natively. Nothing extra to do here on `final`.
         const alts = (u.alternatives || [])
           .slice(0, 3)
           .map((a: any) => `${a.move} ${pct(a.confidence)}`)
