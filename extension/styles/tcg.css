@@ -342,8 +342,14 @@
   margin: 0 -5px 2px;
 }
 .sc-tcg-card .energy-row {
-  display: flex; gap: 2px;
-  min-width: 96px;
+  /* Width-capped flex wrap: orb count tracks K (one orb per hypothesis),
+     and the row wraps to additional rows when K > 4. So K=2 is two orbs
+     in one row, K=4 is one row of 4, K=8 is 4+4 wrap. Width = 4 orbs
+     (22px) + 3 gaps (2px) = 94px. */
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  width: 94px;
   flex-shrink: 0;
 }
 .sc-tcg-card .energy {

@@ -911,7 +911,7 @@ export default defineContentScript({
         turn: battle?.turn ?? 0,
         trendTag: `${trend.arrow} LAST 3`,
         hypsTag: Array.isArray(u?.pimcBreakdown) && u.pimcBreakdown.length > 0
-          ? `${u.pimcBreakdown.length}/4 HYPS`
+          ? `${u.pimcBreakdown.length} HYPS`
           : 'SINGLE',
         winPct: Math.round((u.confidence ?? 0) * 100),
         llmExplanation: llmExplanation || 'Analyzing turn…',
