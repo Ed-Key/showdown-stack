@@ -99,9 +99,15 @@ def _request(opp_mons, planh=None):
 # ----- env-flag parsing ----------------------------------------------------
 
 
-def test_env_flag_default_is_zero(monkeypatch):
-    """No env set → K=0 (PIMC OFF)."""
+def test_env_flag_default_is_four(monkeypatch):
+    """No env set → K=4 (PIMC ON by default, 4 hypotheses)."""
     monkeypatch.delenv("POKE_PROXY_PIMC_K", raising=False)
+    assert proxy._read_pimc_k_env() == 4
+
+
+def test_env_flag_explicit_zero_disables(monkeypatch):
+    """Explicit `POKE_PROXY_PIMC_K=0` overrides the default and disables PIMC."""
+    monkeypatch.setenv("POKE_PROXY_PIMC_K", "0")
     assert proxy._read_pimc_k_env() == 0
 
 

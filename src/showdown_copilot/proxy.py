@@ -103,19 +103,29 @@ _TERA_BANNED_FORMATS: frozenset[str] = frozenset({
 })
 
 # --- PIMC v2 proxy fan-out -------------------------------------------------
-# Feature flag. Default 0 = OFF (live behavior unchanged — single modal POST).
-# K=1 forces single-modal path (same code as K=0). K in 2..8 enables PIMC
-# fan-out: K plausible opponent teams sampled per opp mon, K full hypotheses
-# combined into a `{"hypotheses":[...]}` request the engine can dispatch.
+# Default K=4 = PIMC ON. Explicit `POKE_PROXY_PIMC_K=0` disables (single-modal
+# POST), and K=1 also routes through the single-modal path. K in 2..8 enables
+# PIMC fan-out: K plausible opponent teams sampled per opp mon, K full
+# hypotheses combined into a `{"hypotheses":[...]}` request the engine can
+# dispatch.
 #
 # Read at request time (not import time) so a manual env-flip + uvicorn
-# autoreload picks it up without code edits. Set via:
-#   `POKE_PROXY_PIMC_K=4 python -m showdown_copilot.proxy`
+# autoreload picks it up without code edits. Override via:
+#   `POKE_PROXY_PIMC_K=8 sc-proxy`   (max hypotheses)
+#   `POKE_PROXY_PIMC_K=0 sc-proxy`   (disable PIMC explicitly)
 # Bound is enforced (clamp to [0, 8]) — anything outside is ignored to
 # protect the engine from runaway K values eating the per-hypothesis budget.
+# Invalid input (negative, non-numeric) falls back to 0 rather than the
+# default 4: a misconfigured env var should not silently elevate to PIMC.
+_DEFAULT_PIMC_K = 4
+
+
 def _read_pimc_k_env() -> int:
-    """Parse `POKE_PROXY_PIMC_K`; clamp to [0, 8]; return 0 on parse error."""
-    raw = os.environ.get("POKE_PROXY_PIMC_K", "0")
+    """Parse `POKE_PROXY_PIMC_K`; clamp to [0, 8]; return 0 on parse error.
+    Returns `_DEFAULT_PIMC_K` (4) when the env var is unset."""
+    raw = os.environ.get("POKE_PROXY_PIMC_K")
+    if raw is None:
+        return _DEFAULT_PIMC_K
     try:
         k = int(raw)
     except (TypeError, ValueError):
