@@ -22,6 +22,30 @@ describe('buildMyPokemon', () => {
     expect(result.moves).toHaveLength(4);
     expect(result.moves[0].id).toBe('magmastorm');
   });
+
+  it('uses the active object HP when myPokemon is stale for the active slot', () => {
+    const fakeMon = {
+      speciesForme: 'Heatran',
+      level: 100,
+      hp: 386, maxhp: 386,
+      ability: 'flashfire',
+      item: 'leftovers',
+      stats: { atk: 195, def: 252, spa: 328, spd: 295, spe: 222 },
+      status: '',
+      moves: ['magmastorm'],
+    };
+    const active = {
+      species: { name: 'Heatran' },
+      hp: 96,
+      maxhp: 386,
+      status: 'brn',
+    };
+    const fakeWin = { Dex: { species: { get: () => ({ types: ['Fire', 'Steel'], baseStats: {}, abilities: { 0: 'flashfire' } }) } } };
+    const result = buildMyPokemon(fakeMon, null, fakeWin as any, active);
+    expect(result.hp).toBe(96);
+    expect(result.maxhp).toBe(386);
+    expect(result.status).toBe('Burn');
+  });
 });
 
 const _xformDexWin = {

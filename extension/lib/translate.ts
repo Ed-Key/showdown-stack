@@ -40,14 +40,33 @@ export function padMovesWithPriors(revealed: any[], speciesDisplay: string) {
 }
 
 // ---- translation: Showdown battle → poke-engine payload --------------
-export function buildMyPokemon(p: any, activeMoves: any[] | null = null, win: any) {
+export function buildMyPokemon(
+  p: any,
+  activeMoves: any[] | null = null,
+  win: any,
+  activeOverride: any = null,
+) {
   const speciesRaw = p.speciesForme || p.species;
+  const activeSpecies = activeOverride
+    ? norm(activeOverride.species?.name || activeOverride.speciesForme || activeOverride.species || '')
+    : '';
+  const useActiveHp =
+    !!activeOverride &&
+    activeSpecies === norm(speciesRaw) &&
+    typeof activeOverride.hp === 'number' &&
+    typeof activeOverride.maxhp === 'number' &&
+    activeOverride.maxhp > 1;
+  const statusRaw =
+    useActiveHp && typeof activeOverride.status === 'string'
+      ? activeOverride.status
+      : p.status;
+
   return {
     species: norm(speciesRaw),
     level: p.level || 100,
     types: resolveTypes(speciesRaw, win),
-    hp: p.hp || 0,
-    maxhp: p.maxhp || 1,
+    hp: useActiveHp ? activeOverride.hp : (p.hp || 0),
+    maxhp: useActiveHp ? activeOverride.maxhp : (p.maxhp || 1),
     ability: norm(p.ability || p.baseAbility || 'none'),
     item: norm(p.item || 'none'),
     nature: 'Serious',
@@ -57,7 +76,7 @@ export function buildMyPokemon(p: any, activeMoves: any[] | null = null, win: an
     specialAttack: p.stats?.spa || 100,
     specialDefense: p.stats?.spd || 100,
     speed: p.stats?.spe || 100,
-    status: STATUS[(p.status || '').toLowerCase()] || 'None',
+    status: STATUS[(statusRaw || '').toLowerCase()] || 'None',
     restTurns: 0, sleepTurns: 0, weightKg: 0.0,
     moves: padMoves((p.moves || []).map((m: string) => {
       const id = norm(m);
@@ -792,7 +811,12 @@ export function translate(b: any, req: any = null, win: any) {
   // null and we fall back to the existing pp=8, disabled=false defaults.
   const myActiveMoves = req?.active?.[0]?.moves ?? null;
   const myMons = (b.myPokemon || []).map((p: any, i: number) =>
-    buildMyPokemon(p, i === myActiveIdx ? myActiveMoves : null, win));
+    buildMyPokemon(
+      p,
+      i === myActiveIdx ? myActiveMoves : null,
+      win,
+      i === myActiveIdx ? myActive : null,
+    ));
   const oppMons = (farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
   const oppActive = farSide?.active?.[0];
   let oppActiveIdx = 0;

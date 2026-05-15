@@ -229,7 +229,13 @@ export default defineContentScript({
 
     async function refreshMatrix(b: any, br: any): Promise<void> {
       if (!b || !br?.id) return;
-      const myTeam = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+      // Pass mySide.active[0] as the 4th arg so the active slot's stale-HP
+      // entry in b.myPokemon gets overridden with live HP/status (matches
+      // the override Ed wired in translate.ts:L813). Non-active slots
+      // ignore it via the species-match check inside buildMyPokemon.
+      const myActiveLive = b.mySide?.active?.[0] ?? null;
+      const myTeam = (b.myPokemon || []).map((p: any) =>
+        buildMyPokemon(p, null, win, myActiveLive));
       const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
       if (!myTeam.length || !oppTeam.length) {
         lastMatrix = null;
@@ -278,7 +284,8 @@ export default defineContentScript({
         lastThreats = null;
         return;
       }
-      const myTeam = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+      const myTeam = (b.myPokemon || []).map((p: any) =>
+        buildMyPokemon(p, null, win, myActive));
       const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
       lastThreats = computeThreats({
         matrix: lastMatrix,
@@ -1212,7 +1219,8 @@ export default defineContentScript({
         const myActive = b?.mySide?.active?.[0];
         const oppActive = b?.farSide?.active?.[0];
         if (myActive && oppActive) {
-          const myTeamSnaps = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win));
+          const myTeamSnaps = (b.myPokemon || []).map((p: any) =>
+            buildMyPokemon(p, null, win, myActive));
           const myTeamSpecies = myTeamSnaps.map((p: any) => p.species);
           const rec = parseRecommendation(u.bestMove || '', myTeamSpecies);
           const conflict = detectConflict({
