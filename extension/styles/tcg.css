@@ -185,6 +185,55 @@
   font-style: normal; font-weight: 500;
   color: #ffd9a8; font-size: 9.5px;
 }
+.sc-conflict-banner .safe-switch-chip em.incoming { color: #ffd9a8; }
+
+/* Speed indicator — lightning bolt when the candidate outspeeds opp.active,
+   subtle arrow when slower. Renders inline between incoming% and outgoing. */
+.sc-conflict-banner .safe-switch-chip .speed-badge {
+  font-size: 10px;
+  margin: 0 1px 0 3px;
+  line-height: 1;
+}
+.sc-conflict-banner .safe-switch-chip .speed-badge.faster { color: #ffe898; }
+.sc-conflict-banner .safe-switch-chip .speed-badge.slower {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 9px;
+}
+
+/* Outgoing move column — separated from incoming by a hairline divider.
+   "Best move back" damage in a slight green for positive valence. */
+.sc-conflict-banner .safe-switch-chip .outgoing-move {
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.sc-conflict-banner .safe-switch-chip .outgoing-dmg {
+  font-style: normal; font-weight: 500;
+  color: #c8ffb0; font-size: 9.5px;
+  margin-left: 3px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sc-conflict-banner .safe-switch-chip .kill-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  background: rgba(200, 48, 42, 0.85);
+  color: #fff;
+  font-size: 8.5px; font-weight: 700;
+  letter-spacing: 0.08em;
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+.sc-conflict-banner .safe-switch-chip .kill-tag.two {
+  background: rgba(255, 176, 96, 0.85);
+  color: #2a1810;
+}
 
 /* ───────── TCG CARD ───────── */
 .sc-tcg-wrap {

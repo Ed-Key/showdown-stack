@@ -11,6 +11,15 @@ export interface SafeSwitchEntry {
   species: string;
   /** Worst-case damage % this mon takes from opp's onField threats. */
   worstDmgPct: number;
+  /** Candidate's hardest non-immune move vs opp's active mon. */
+  bestMoveBack?: {
+    move: string;
+    dmgPctMax: number;
+    ohko: boolean;
+    twoHko: boolean;
+  };
+  /** True iff candidate strictly outspeeds opp.active. */
+  fasterThanOpp?: boolean;
 }
 
 export interface ConflictBannerProps {
@@ -30,6 +39,31 @@ const SEVERITY_LABEL: Record<ConflictSeverity, string> = {
   PIVOT: '⚠ PIVOT INTO DEATH',
 };
 
+function renderSafeSwitchChip(s: SafeSwitchEntry): string {
+  const speedBadge =
+    s.fasterThanOpp === true
+      ? `<span class="speed-badge faster" title="Outspeeds opp">⚡</span>`
+      : s.fasterThanOpp === false
+        ? `<span class="speed-badge slower" title="Slower than opp">↓</span>`
+        : '';
+
+  let outgoingHtml = '';
+  if (s.bestMoveBack) {
+    const killTag = s.bestMoveBack.ohko
+      ? `<span class="kill-tag ohko">OHKO</span>`
+      : s.bestMoveBack.twoHko
+        ? `<span class="kill-tag two">2HKO</span>`
+        : '';
+    outgoingHtml = `<span class="outgoing-move">${escapeHtml(s.bestMoveBack.move)} <em class="outgoing-dmg">${Math.round(s.bestMoveBack.dmgPctMax)}%</em>${killTag}</span>`;
+  }
+
+  return `<span class="safe-switch-chip">`
+    + `${escapeHtml(s.species)} <em class="incoming">${Math.round(s.worstDmgPct)}%</em>`
+    + speedBadge
+    + outgoingHtml
+    + `</span>`;
+}
+
 export function renderConflictBanner(props: ConflictBannerProps | null): HTMLElement {
   const el = document.createElement('div');
   el.className = 'sc-conflict-banner';
@@ -40,9 +74,7 @@ export function renderConflictBanner(props: ConflictBannerProps | null): HTMLEle
   const safeSwitchesHtml = props.safeSwitches?.length
     ? `<div class="safe-switches">
          <span class="safe-switches-label">→ Safer switch:</span>
-         ${props.safeSwitches
-           .map(s => `<span class="safe-switch-chip">${escapeHtml(s.species)} <em>${Math.round(s.worstDmgPct)}%</em></span>`)
-           .join('')}
+         ${props.safeSwitches.map(renderSafeSwitchChip).join('')}
        </div>`
     : '';
   el.innerHTML = `

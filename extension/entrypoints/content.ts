@@ -221,6 +221,10 @@ export default defineContentScript({
     // `lastMatrix` is still populated because the new threats panel +
     // TCG card bottom strip + LLM explainer summary all read it.
     let lastMatrix: DamageMatrix | null = null;
+    /** Mine-attacks-opp direction. Powers the safe-switch chips'
+     *  "best move back" lookup in the conflict banner. Built alongside
+     *  lastMatrix in refreshMatrix; null when teams aren't ready. */
+    let lastMeAttacksMatrix: DamageMatrix | null = null;
     let lastBeliefSnapshot: BeliefSnapshot | null = null;
 
     async function refreshMatrix(b: any, br: any): Promise<void> {
@@ -229,6 +233,7 @@ export default defineContentScript({
       const oppTeam = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
       if (!myTeam.length || !oppTeam.length) {
         lastMatrix = null;
+        lastMeAttacksMatrix = null;
         return;
       }
       const snap = await fetchBeliefSnapshot(PROXY_BASE_URL, br.id);
@@ -237,13 +242,20 @@ export default defineContentScript({
       for (const [species, b2] of Object.entries(snap?.opponents || {})) {
         beliefByOpp[species] = b2;
       }
-      // Stage 1: render opp-attacking-mine only — most useful threat view.
-      // Stage 1.5 will add the symmetric matrix for team-preview lead pick.
+      const field = { weather: detectWeather(b) || '', terrain: detectTerrain(b) || '' };
       lastMatrix = buildDamageMatrix({
         attackers: oppTeam, defenders: myTeam,
         beliefByDefender: beliefByOpp,
-        field: { weather: detectWeather(b) || '', terrain: detectTerrain(b) || '' },
+        field,
         attackerSide: 'opp',
+      });
+      // Symmetric mine-attacks-opp direction: my mons' moves vs opp team.
+      // Drives the safe-switch "best move back" data in the conflict banner.
+      lastMeAttacksMatrix = buildDamageMatrix({
+        attackers: myTeam, defenders: oppTeam,
+        beliefByDefender: beliefByOpp,
+        field,
+        attackerSide: 'mine',
       });
     }
 
@@ -771,6 +783,8 @@ export default defineContentScript({
         safeSwitches: c.safeSwitches?.map(s => ({
           species: s.species,
           worstDmgPct: s.worstDmgPct,
+          bestMoveBack: s.bestMoveBack,
+          fasterThanOpp: s.fasterThanOpp,
         })),
       });
       card.insertBefore(newBanner, card.firstChild);
@@ -1207,6 +1221,7 @@ export default defineContentScript({
             myActive: buildMyPokemon(myActive, null, win),
             oppActive: buildOppPokemon(oppActive, win),
             myTeam: myTeamSnaps,
+            meAttacksMatrix: lastMeAttacksMatrix ?? undefined,
           });
           renderConflict(conflict);
           // Persist for the post-battle overlay (debug-corpus). The helper

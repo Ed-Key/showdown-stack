@@ -137,3 +137,113 @@ describe('detectConflict', () => {
     expect(safe).toEqual([{ species: 'Diancie', worstDmgPct: 0 }]);
   });
 });
+
+describe('computeSafeSwitches with matrix + speed data', () => {
+  const heatran = { species: 'Heatran', speed: 222, hp: 100 } as any;
+  const oppGarchomp = { species: 'Garchomp', speed: 311, hp: 100 } as any;
+  const oppSlower = { species: 'Slowking', speed: 250, hp: 100 } as any;
+  const baseThreats = {
+    onField: [{
+      oppSpecies: 'Garchomp', oppMove: 'earthquake', moveSource: 'revealed' as const,
+      victims: [
+        { species: 'Heatran', dmgPct: 105, ohko: true, twoHko: false },
+        { species: 'Latios', dmgPct: 40, ohko: false, twoHko: false },
+      ],
+      speedAdvantage: 'opp_faster' as const,
+    }],
+    incoming: [], speedNote: '',
+  };
+
+  const matrixCell = (over: Record<string, any>): any => ({
+    moveSource: 'revealed', dmgPctMin: 0, dmgPctMax: 0,
+    ohko: false, twoHko: false, immune: false,
+    ...over,
+  });
+
+  it('best move back picked correctly (highest dmgPctMax wins)', () => {
+    const team = [
+      heatran,
+      { species: 'Latios', speed: 320, hp: 100 } as any,
+    ];
+    const matrix = {
+      cells: [
+        matrixCell({ attacker: 'Latios', defender: 'Garchomp', move: 'dracometeor', dmgPctMax: 75 }),
+        matrixCell({ attacker: 'Latios', defender: 'Garchomp', move: 'psychic', dmgPctMax: 50 }),
+        matrixCell({ attacker: 'Latios', defender: 'Garchomp', move: 'hiddenpowerice', dmgPctMax: 110, ohko: true }),
+      ],
+      attackerSide: 'mine' as const, computedAt: 0,
+    };
+    const safe = computeSafeSwitches(baseThreats, heatran, team, oppGarchomp, matrix);
+    expect(safe.length).toBe(1);
+    expect(safe[0].bestMoveBack).toEqual({
+      move: 'hiddenpowerice', dmgPctMax: 110, ohko: true, twoHko: false,
+    });
+  });
+
+  it('immune cells skipped when picking best move back', () => {
+    // Lopunny's Close Combat OHKOs but its Quick Attack hits a Ghost — engine
+    // should ignore the immune cell entirely, even though it nominally
+    // "exists" in the matrix.
+    const team = [heatran, { species: 'Lopunny', speed: 240, hp: 100 } as any];
+    const matrix = {
+      cells: [
+        matrixCell({ attacker: 'Lopunny', defender: 'Garchomp', move: 'quickattack', dmgPctMax: 0, immune: true }),
+        matrixCell({ attacker: 'Lopunny', defender: 'Garchomp', move: 'closecombat', dmgPctMax: 95, twoHko: true }),
+      ],
+      attackerSide: 'mine' as const, computedAt: 0,
+    };
+    const safe = computeSafeSwitches(baseThreats, heatran, team, oppGarchomp, matrix);
+    expect(safe[0].bestMoveBack?.move).toBe('closecombat');
+    expect(safe[0].bestMoveBack?.twoHko).toBe(true);
+  });
+
+  it('all-immune candidate has no bestMoveBack', () => {
+    // Normal-type mon attacking pure Ghost — every move immune. Should still
+    // appear as a safe switch (it survives) but with no bestMoveBack data.
+    const team = [heatran, { species: 'Snorlax', speed: 60, hp: 100 } as any];
+    const matrix = {
+      cells: [
+        matrixCell({ attacker: 'Snorlax', defender: 'Garchomp', move: 'bodyslam', dmgPctMax: 0, immune: true }),
+        matrixCell({ attacker: 'Snorlax', defender: 'Garchomp', move: 'doubleedge', dmgPctMax: 0, immune: true }),
+      ],
+      attackerSide: 'mine' as const, computedAt: 0,
+    };
+    const safe = computeSafeSwitches(baseThreats, heatran, team, oppGarchomp, matrix);
+    expect(safe.length).toBe(1);
+    expect(safe[0].bestMoveBack).toBeUndefined();
+  });
+
+  it('fasterThanOpp accurate at the speed-tie boundary', () => {
+    // Three candidates at speeds 300, 250, 250 vs an opp at 250 — strict
+    // greater-than only; tie resolves false.
+    const team = [
+      heatran,
+      { species: 'Fast', speed: 300, hp: 100 } as any,
+      { species: 'TiedA', speed: 250, hp: 100 } as any,
+      { species: 'TiedB', speed: 250, hp: 100 } as any,
+    ];
+    // Use a "no damage" threat so all three are equally safe.
+    const benignThreats = {
+      onField: [{
+        oppSpecies: 'Slowking', oppMove: 'scald', moveSource: 'revealed' as const,
+        victims: [], speedAdvantage: 'me_faster' as const,
+      }],
+      incoming: [], speedNote: '',
+    };
+    const safe = computeSafeSwitches(benignThreats, heatran, team, oppSlower);
+    const bySpec = Object.fromEntries(safe.map(s => [s.species, s.fasterThanOpp]));
+    expect(bySpec).toEqual({ Fast: true, TiedA: false, TiedB: false });
+  });
+
+  it('no matrix or oppActive → legacy shape preserved (no new fields)', () => {
+    const team = [
+      heatran,
+      { species: 'Latios', speed: 320, hp: 100 } as any,
+    ];
+    const safe = computeSafeSwitches(baseThreats, heatran, team);
+    expect(safe).toEqual([{ species: 'Latios', worstDmgPct: 40 }]);
+    // No bestMoveBack, no fasterThanOpp keys.
+    expect('bestMoveBack' in safe[0]).toBe(false);
+    expect('fasterThanOpp' in safe[0]).toBe(false);
+  });
+});

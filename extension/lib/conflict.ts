@@ -1,5 +1,6 @@
 // extension/lib/conflict.ts
 
+import type { DamageMatrix } from './damage-matrix';
 import type { ThreatsReport } from './threats';
 import type { PokemonSnapshot } from './types';
 
@@ -8,6 +9,26 @@ export type SafeSwitch = {
   species: string;
   /** Worst (highest) damage% this mon takes from any opp-active onField move. */
   worstDmgPct: number;
+  /**
+   * The candidate's hardest-hitting non-immune move vs opp's active mon,
+   * pulled from the mine-attacks-opp damage matrix. Undefined when the
+   * matrix isn't available, the matrix has no cells for this attacker /
+   * defender pair, or every move the candidate has is immune.
+   */
+  bestMoveBack?: {
+    /** Move ID (e.g. "magmastorm" — uppercased at render time). */
+    move: string;
+    /** Max-roll % HP dealt to opp.active. */
+    dmgPctMax: number;
+    ohko: boolean;
+    twoHko: boolean;
+  };
+  /**
+   * True iff candidate.speed > oppActive.speed strictly. Ties resolve false
+   * — "faster" implies a guaranteed-first turn. Undefined when oppActive
+   * isn't provided to computeSafeSwitches.
+   */
+  fasterThanOpp?: boolean;
 };
 
 export type ConflictWarning = {
@@ -26,11 +47,20 @@ export type ConflictWarning = {
  * Rank non-active, non-fainted bench mons by worst-case damage from the
  * opp's currently-active threats. Excludes any mon taking ≥100% (OHKO).
  * Returns up to `topN` survivors, lowest damage first.
+ *
+ * When `oppActive` is supplied, each entry also reports whether the
+ * candidate strictly outspeeds the active opp. When `meAttacksMatrix`
+ * is supplied, each entry also reports the candidate's hardest non-
+ * immune move vs the active opp (pulled from the matrix cells). Both
+ * additions are optional — callers without either still get the
+ * existing species + worstDmgPct shape.
  */
 export function computeSafeSwitches(
   threats: ThreatsReport,
   myActive: PokemonSnapshot,
   myTeam: PokemonSnapshot[],
+  oppActive?: PokemonSnapshot,
+  meAttacksMatrix?: DamageMatrix,
   topN: number = 3,
 ): SafeSwitch[] {
   const candidates = myTeam.filter(
@@ -42,7 +72,28 @@ export function computeSafeSwitches(
       const v = t.victims.find(v => v.species === p.species);
       if (v && v.dmgPct > worst) worst = v.dmgPct;
     }
-    return { species: p.species, worstDmgPct: worst };
+    const entry: SafeSwitch = { species: p.species, worstDmgPct: worst };
+
+    if (oppActive) {
+      entry.fasterThanOpp = p.speed > oppActive.speed;
+    }
+
+    if (oppActive && meAttacksMatrix) {
+      const myCells = meAttacksMatrix.cells.filter(
+        c => c.attacker === p.species && c.defender === oppActive.species && !c.immune,
+      );
+      if (myCells.length > 0) {
+        const top = myCells.reduce((a, b) => (b.dmgPctMax > a.dmgPctMax ? b : a));
+        entry.bestMoveBack = {
+          move: top.move,
+          dmgPctMax: top.dmgPctMax,
+          ohko: top.ohko,
+          twoHko: top.twoHko,
+        };
+      }
+    }
+
+    return entry;
   });
   return ranked
     .filter(s => s.worstDmgPct < 100)
@@ -56,8 +107,11 @@ export function detectConflict(opts: {
   myActive: PokemonSnapshot;
   oppActive: PokemonSnapshot;
   myTeam: PokemonSnapshot[];
+  /** Optional mine-attacks-opp matrix for enriching safeSwitches with
+   *  best-move-back damage data. */
+  meAttacksMatrix?: DamageMatrix;
 }): ConflictWarning | null {
-  const { engineRecommendation: rec, threats, myActive, oppActive, myTeam } = opts;
+  const { engineRecommendation: rec, threats, myActive, oppActive, myTeam, meAttacksMatrix } = opts;
 
   // Find the worst threat from opp's active mon vs my active
   const onFieldVsMe = threats.onField
@@ -71,7 +125,7 @@ export function detectConflict(opts: {
     return {
       level: 'strong',
       message: `STRONG CONFLICT: ${oppActive.species} ${worst.t.oppMove} guaranteed OHKO ${myActive.species}. Engine may not see this.`,
-      safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
+      safeSwitches: computeSafeSwitches(threats, myActive, myTeam, oppActive, meAttacksMatrix),
     };
   }
 
@@ -80,7 +134,7 @@ export function detectConflict(opts: {
     return {
       level: 'warn',
       message: `POSSIBLE CONFLICT: ${oppActive.species} ${worst.t.oppMove} OHKOs ${myActive.species}; speed tier unclear (Scarf?).`,
-      safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
+      safeSwitches: computeSafeSwitches(threats, myActive, myTeam, oppActive, meAttacksMatrix),
     };
   }
 
@@ -93,7 +147,7 @@ export function detectConflict(opts: {
       return {
         level: 'pivot',
         message: `PIVOT WARNING: switching to ${rec.switchTarget} — ${oppActive.species} OHKOs it too. Pick a different switch.`,
-        safeSwitches: computeSafeSwitches(threats, myActive, myTeam),
+        safeSwitches: computeSafeSwitches(threats, myActive, myTeam, oppActive, meAttacksMatrix),
       };
     }
   }
