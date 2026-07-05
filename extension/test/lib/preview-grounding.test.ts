@@ -65,4 +65,14 @@ describe('buildPreviewGrounding', () => {
     expect(row.threatens).toBe(2);      // OHKOs Kingdra + Pelipper
     expect(row.survives).toBe(1);       // 2 opp attackers, 1 OHKOs it
   });
+
+  it('orders non-OHKO cells by damage descending', () => {
+    const my = matrix([
+      cell({ attacker: 'A1', defender: 'D1', dmgPctMin: 55, dmgPctMax: 62 }),
+      cell({ attacker: 'A2', defender: 'D2', dmgPctMin: 70, dmgPctMax: 88 }),
+      cell({ attacker: 'A3', defender: 'D3', dmgPctMin: 50, dmgPctMax: 71 }),
+    ], 'mine');
+    const g = buildPreviewGrounding(my, null)!;
+    expect(g.damageCells.map((c) => c.attacker)).toEqual(['A2', 'A3', 'A1']);
+  });
 });
