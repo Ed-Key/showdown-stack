@@ -4,9 +4,15 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+node_modules/
+*.tsbuildinfo
+.DS_Store
 
 # Engine sub-repos (own git history, tracked separately)
 engine/
 engine-doubles/
 sidecar/
 .env
+.env.*
+!.env.example
+!.env.sample
