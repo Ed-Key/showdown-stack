@@ -9,10 +9,6 @@ export type PlanEntry = PlanCacheEntry & { response: PreviewPlanResponse | null 
 
 const entries = new Map<string, PlanEntry>();
 
-function keyFor(request: PreviewPlanRequest): string {
-  return request.battleId || JSON.stringify(request.opponentTeam);
-}
-
 export function cachedPreviewPlan(battleId: string): PreviewPlanResponse | null {
   return entries.get(battleId)?.response ?? null;
 }
@@ -30,7 +26,8 @@ export async function requestPreviewPlan(
   request: PreviewPlanRequest,
   nowMs: number = Date.now(),
 ): Promise<PreviewPlanResponse | null> {
-  const key = keyFor(request);
+  const key = request.battleId;
+  if (!key) return null;
   const prev = entries.get(key);
   if (!shouldRequestPlan(prev, nowMs)) return prev?.response ?? null;
 

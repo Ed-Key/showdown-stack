@@ -78,4 +78,21 @@ describe('requestPreviewPlan', () => {
     expect(previewPlanEntry('battle-x')?.status).toBe('error');
     expect(cachedPreviewPlan('battle-x')?.source).toBe('fallback');
   });
+
+  it('does not fetch or cache when battleId is empty', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(MODEL_BODY));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await requestPreviewPlan('http://p', { ...REQUEST, battleId: '' }, 1000);
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('treats non-ok responses as transient errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}, false));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await requestPreviewPlan('http://p', REQUEST, 1000);
+    expect(result).toBeNull();
+    expect(previewPlanEntry('battle-x')?.status).toBe('error');
+    expect(previewPlanEntry('battle-x')?.permanent).toBe(false);
+  });
 });
