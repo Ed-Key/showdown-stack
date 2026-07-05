@@ -14,9 +14,10 @@ import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { detectConflict, type ConflictWarning } from '../lib/conflict';
 import { fetchExplanation } from '../lib/explainer';
-import { fetchPreviewPlan, previewPokemonFromSnapshot } from '../lib/preview-plan-client';
+import { cachedPreviewPlan, previewPlanEntry, requestPreviewPlan, previewPokemonFromSnapshot } from '../lib/preview-plan-client';
+import { canRenderPlan, MAX_PLAN_ATTEMPTS } from '../lib/plan-lifecycle';
 import { evaluatePlanFit } from '../lib/plan-fit';
-import type { MatchupPlan, PlanFitResult, PreviewPlanResponse } from '../lib/matchup-plan';
+import type { MatchupPlan, PlanFitResult } from '../lib/matchup-plan';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
   computeTrendArrow,
@@ -225,10 +226,7 @@ export default defineContentScript({
      *  lastMatrix in refreshMatrix; null when teams aren't ready. */
     let lastMeAttacksMatrix: DamageMatrix | null = null;
     let lastBeliefSnapshot: BeliefSnapshot | null = null;
-    const matchupPlansByBattle = new Map<string, PreviewPlanResponse>();
-    const matchupPlanRequests = new Set<string>();
     let lastPlanFit: PlanFitResult | null = null;
-    const MATCHUP_PLAN_RENDER_TURN_LIMIT = 1;
 
     async function refreshMatrix(b: any, br: any): Promise<void> {
       if (!b || !br?.id) return;
@@ -301,7 +299,7 @@ export default defineContentScript({
 
     function currentMatchupPlan(battleId?: string): MatchupPlan | null {
       if (!battleId) return null;
-      return matchupPlansByBattle.get(battleId)?.plan ?? null;
+      return cachedPreviewPlan(battleId)?.plan ?? null;
     }
 
     function currentBattlePreviewState(battleId: string): {
@@ -321,10 +319,8 @@ export default defineContentScript({
       };
     }
 
-    function shouldRenderMatchupPlan(battleId: string): boolean {
-      const state = currentBattlePreviewState(battleId);
-      if (!state.sameBattle || state.ended) return false;
-      return state.teamPreview || state.turn <= MATCHUP_PLAN_RENDER_TURN_LIMIT;
+    function canRenderMatchupPlan(battleId: string): boolean {
+      return canRenderPlan(currentBattlePreviewState(battleId));
     }
 
     function mountMatchupPlanCard(el: HTMLElement): void {
@@ -343,6 +339,28 @@ export default defineContentScript({
       pinnedEl.querySelector('.sc-matchup-plan-card')?.remove();
     }
 
+    function renderPlanForBattle(battleId: string): void {
+      if (!canRenderMatchupPlan(battleId)) return;
+      const cached = cachedPreviewPlan(battleId);
+      if (cached) {
+        const card = renderMatchupPlanCard(cached);
+        mountMatchupPlanCard(card);
+        attachPanelToggle(card, '.sc-plan-topline', 'showdownCopilot.matchupPlanCollapsed');
+        return;
+      }
+      const entry = previewPlanEntry(battleId);
+      if (!entry) return;
+      if (entry.status === 'inflight') {
+        mountMatchupPlanCard(renderMatchupPlanLoading('Building matchup plan...'));
+      } else {
+        mountMatchupPlanCard(renderMatchupPlanLoading(
+          entry.attempts >= MAX_PLAN_ATTEMPTS
+            ? 'Matchup plan unavailable.'
+            : 'Matchup plan unavailable — will retry.',
+        ));
+      }
+    }
+
     function mountPlanFit(result: PlanFitResult | null): void {
       if (!result || result.rating === 'good') {
         pinnedEl.querySelector('.sc-plan-fit-banner')?.remove();
@@ -357,109 +375,37 @@ export default defineContentScript({
       });
     }
 
-    function requestMatchupPlan(
-      b: any,
-      br: any,
-      mySnaps: any[],
-      oppSnaps: any[],
-    ): void {
+    function requestMatchupPlan(b: any, br: any, mySnaps: any[], oppSnaps: any[]): void {
       const battleId = String(br?.id ?? '');
       if (!battleId || !mySnaps.length || !oppSnaps.length) return;
-      const cached = matchupPlansByBattle.get(battleId);
-      if (cached) {
-        if (shouldRenderMatchupPlan(battleId)) {
-          mountMatchupPlanCard(renderMatchupPlanCard(cached));
-        }
-        return;
-      }
-      if (matchupPlanRequests.has(battleId)) {
-        if (shouldRenderMatchupPlan(battleId)) {
-          mountMatchupPlanCard(renderMatchupPlanLoading('Building matchup plan...'));
-        }
-        return;
-      }
-
-      matchupPlanRequests.add(battleId);
-      if (shouldRenderMatchupPlan(battleId)) {
-        mountMatchupPlanCard(renderMatchupPlanLoading('Building matchup plan...'));
-      }
       const startedAtMs = Date.now();
-      console.log('[sc:preview-plan] request start', {
-        battleId,
-        turn: currentBattlePreviewState(battleId).turn,
-        myTeam: mySnaps.map((p: any) => p.species),
-        opponentTeam: oppSnaps.map((p: any) => p.species),
-        presetId: configuredPreviewPlanPresetId(),
-      });
-      fetchPreviewPlan(PROXY_BASE_URL, {
+      void requestPreviewPlan(PROXY_BASE_URL, {
         battleId,
         format: String(b?.tier || 'gen9nationaldex'),
         myTeam: mySnaps.map(previewPokemonFromSnapshot),
-        opponentTeam: oppSnaps
-          .map((p: any) => String(p?.species ?? ''))
-          .filter(Boolean),
+        opponentTeam: oppSnaps.map((p: any) => String(p?.species ?? '')).filter(Boolean),
         teamStats: { source: 'live-team-preview' },
         presetId: configuredPreviewPlanPresetId(),
         runMode: 'auto',
       }).then((response) => {
-        matchupPlanRequests.delete(battleId);
-        if (!response) {
-          console.log('[sc:preview-plan] unavailable', {
+        if (response) {
+          console.log('[sc:preview-plan] response', {
             battleId,
             latencyMs: Date.now() - startedAtMs,
-            state: currentBattlePreviewState(battleId),
+            source: response.source,
+            model: response.model,
+            fallbackReason: response.fallbackReason,
           });
-          if (shouldRenderMatchupPlan(battleId)) {
-            mountMatchupPlanCard(renderMatchupPlanLoading('Matchup plan unavailable.'));
-          } else {
-            removeMatchupPlanCard();
-          }
-          return;
         }
-        matchupPlansByBattle.set(battleId, response);
-        const state = currentBattlePreviewState(battleId);
-        console.log('[sc:preview-plan] response', {
-          battleId,
-          latencyMs: Date.now() - startedAtMs,
-          source: response.source,
-          provider: response.provider,
-          model: response.model,
-          fallbackReason: response.fallbackReason,
-          state,
-        });
-        if (!shouldRenderMatchupPlan(battleId)) {
-          console.log('[sc:preview-plan] skipped stale render', { battleId, state });
-          removeMatchupPlanCard();
-          return;
-        }
-        mountMatchupPlanCard(renderMatchupPlanCard(response));
-      }).catch((err) => {
-        matchupPlanRequests.delete(battleId);
-        console.warn('[sc:preview-plan] request failed', err);
-        if (shouldRenderMatchupPlan(battleId)) {
-          mountMatchupPlanCard(renderMatchupPlanLoading('Matchup plan failed.'));
-        } else {
-          removeMatchupPlanCard();
-        }
+        renderPlanForBattle(battleId);
       });
+      renderPlanForBattle(battleId); // paint loading/cached state immediately
     }
 
     function requestMatchupPlanFromBattle(b: any, br: any): void {
-      if (!b || !br?.id || currentMatchupPlan(String(br.id))) {
-        return;
-      }
-      if (Number(b.turn ?? 0) > MATCHUP_PLAN_RENDER_TURN_LIMIT) {
-        if (matchupPlanRequests.has(String(br.id))) {
-          removeMatchupPlanCard();
-        }
-        return;
-      }
-      if (matchupPlanRequests.has(String(br.id))) {
-        return;
-      }
+      if (!b || !br?.id) return;
       const myActiveLive = b.mySide?.active?.[0] ?? null;
-      const mySnaps = (b.myPokemon || []).map((p: any) =>
-        buildMyPokemon(p, null, win, myActiveLive));
+      const mySnaps = (b.myPokemon || []).map((p: any) => buildMyPokemon(p, null, win, myActiveLive));
       const oppSnaps = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
       if (!mySnaps.length || !oppSnaps.length) return;
       requestMatchupPlan(b, br, mySnaps, oppSnaps);

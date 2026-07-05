@@ -783,3 +783,7 @@
   font-size: 9px; color: #888;
   border-radius: 3px;
 }
+
+/* Matchup plan card: persistent + collapsible (header click toggles). */
+.sc-matchup-plan-card.collapsed > :not(.sc-plan-topline) { display: none; }
+.sc-matchup-plan-card .sc-plan-topline { user-select: none; }

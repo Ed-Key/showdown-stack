@@ -14,6 +14,7 @@ import { renderTcgCard, type TcgCardProps } from '../../panels/tcg-card';
 import { renderThreatsPanel } from '../../panels/threats-panel';
 import { renderPvChain } from '../../panels/pv-chain';
 import { renderConflictBanner } from '../../panels/conflict-banner';
+import { renderMatchupPlanCard } from '../../panels/matchup-plan-card';
 import { mountOrReplace } from '../../lib/panel-mount';
 
 const TCG_FIXTURE: TcgCardProps = {
@@ -38,6 +39,29 @@ const TCG_FIXTURE: TcgCardProps = {
 
 const THREATS_FIXTURE = { onField: [], incoming: [] };
 const PV_FIXTURE = { steps: [{ move: 'ICE SPINNER', side: 'me' as const }], depth: 4, sims: 1024 };
+
+// Minimal MatchupPlan shape renderMatchupPlanCard reads directly (see
+// test/lib/plan-fit.test.ts `basePlan` for a complete literal).
+const FIXTURE_RESPONSE = {
+  source: 'model',
+  model: 'claude-sonnet-4-6',
+  provider: 'anthropic',
+  plan: {
+    archetype: 'bulky stall/control',
+    confidence: 'high',
+    summary: 'Opponent preview shows disruption and recovery loops.',
+    winPath: 'Create progress before passive control stabilizes.',
+    recommendedLead: { pokemon: 'Garchomp', rating: 'safe', reason: 'Default information lead.' },
+    backupLeads: [],
+    avoidLeads: [],
+    leadRules: [],
+    preserveTargets: [],
+    mainThreats: [],
+    dangerRules: [],
+    earlyPriorities: [],
+    uncertainties: [],
+  },
+} as any;
 
 function buildPanelFixture(): HTMLDivElement {
   // Mirrors content.ts:78-90 — the initial panel before any engine update.
@@ -212,5 +236,27 @@ describe('panel mount — degraded fixtures', () => {
     panel.appendChild(child);
     mountConflict(panel, renderConflictBanner({ severity: 'STRONG', reason: 'r' }));
     expect(panel.querySelector('.sc-conflict-banner')).toBeNull();
+  });
+});
+
+describe('matchup plan card persistence', () => {
+  it('matchup plan card stays mounted when re-rendered mid-battle', () => {
+    const root = document.createElement('div');
+    const card1 = renderMatchupPlanCard(FIXTURE_RESPONSE);
+    mountOrReplace(root, {
+      newEl: card1,
+      replaceTargets: ['.sc-matchup-plan-card'],
+      anchors: [],
+      fallback: (r, el) => r.prepend(el),
+    });
+    // Simulate a turn-5 re-render of the same battle: replaces in place, never removes.
+    const card2 = renderMatchupPlanCard(FIXTURE_RESPONSE);
+    mountOrReplace(root, {
+      newEl: card2,
+      replaceTargets: ['.sc-matchup-plan-card'],
+      anchors: [],
+      fallback: (r, el) => r.prepend(el),
+    });
+    expect(root.querySelectorAll('.sc-matchup-plan-card').length).toBe(1);
   });
 });

@@ -72,11 +72,3 @@ export function previewPokemonFromSnapshot(snapshot: any) {
       .filter((move: string) => move && move !== 'none'),
   };
 }
-
-/** @deprecated Task 3 replaces content.ts's call site with requestPreviewPlan. */
-export async function fetchPreviewPlan(
-  proxyUrl: string,
-  request: PreviewPlanRequest,
-): Promise<PreviewPlanResponse | null> {
-  return requestPreviewPlan(proxyUrl, request);
-}
