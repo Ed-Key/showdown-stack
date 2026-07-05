@@ -398,6 +398,8 @@ export default defineContentScript({
           });
         }
         renderPlanForBattle(battleId);
+      }).catch((err) => {
+        console.warn('[sc:preview-plan] update failed', err);
       });
       renderPlanForBattle(battleId); // paint loading/cached state immediately
     }
