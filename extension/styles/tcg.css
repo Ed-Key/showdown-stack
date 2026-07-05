@@ -369,39 +369,18 @@
 .sc-tcg-card .art-tag-trend .trend-delta {
   font-size: 10px; font-weight: 800;
 }
-.sc-tcg-card .spark-strip {
+.sc-tcg-card .confidence-strip {
   position: absolute; bottom: 0; left: 0; right: 0;
   background: linear-gradient(180deg, transparent, rgba(0,0,0,0.7) 70%);
   padding: 12px 10px 5px; z-index: 3;
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 8px;
+  display: flex; align-items: flex-end; justify-content: flex-end;
 }
-.sc-tcg-card .spark-strip svg { flex: 1; height: 22px; }
 .sc-tcg-card .big-conf {
   font-family: 'Bowlby One SC', sans-serif;
   font-size: 26px; color: #fff; line-height: 0.9;
   text-shadow: 2px 2px 0 rgba(0,0,0,0.6);
 }
 .sc-tcg-card .big-conf .pct { font-size: 11px; }
-
-/* FLAVOR STRIP */
-.sc-tcg-card .flavor {
-  background: var(--t-flavor);
-  padding: 5px 11px;
-  font-family: 'Spectral', serif;
-  font-size: 11px; font-style: italic;
-  color: var(--t-accent);
-  line-height: 1.4;
-  margin: 0 9px;
-  border-top: 1px solid rgba(0,0,0,0.15);
-  border-bottom: 1px solid rgba(0,0,0,0.15);
-}
-.sc-tcg-card .flavor .ai-tag {
-  font-family: 'JetBrains Mono', monospace;
-  font-style: normal; font-weight: 700;
-  font-size: 8px; letter-spacing: 0.18em;
-  color: rgba(10,26,48,0.5);
-  margin-right: 4px;
-}
 
 /* MOVES */
 .sc-tcg-card .moves {
@@ -640,6 +619,114 @@
 .sc-pv-card .pv-step.me { border-left: 3px solid #4a8fc8; }
 .sc-pv-card .pv-step.opp { border-left: 3px solid #c84040; }
 .sc-pv-card .pv-arrow { color: #888; font-size: 11px; }
+
+/* ───────── MATCHUP PLAN + PLAN FIT ───────── */
+.sc-matchup-plan-card,
+.sc-plan-fit-banner {
+  margin: 10px 14px;
+  background: linear-gradient(180deg, rgba(18,18,20,0.96), rgba(8,8,10,0.96));
+  border: 1px solid rgba(245,216,120,0.28);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.28);
+  color: #eee;
+  padding: 12px;
+}
+.sc-matchup-plan-card.loading { opacity: 0.8; }
+.sc-plan-topline {
+  display: flex; justify-content: space-between; gap: 10px; align-items: start;
+}
+.sc-plan-kicker,
+.sc-plan-source,
+.sc-plan-fit-label {
+  font-family: 'JetBrains Mono', monospace;
+  color: #f5d878;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+.sc-plan-title {
+  font-family: 'Bowlby One SC', sans-serif;
+  font-size: 20px;
+  color: #fff;
+  line-height: 1.05;
+  margin-top: 3px;
+}
+.sc-plan-summary,
+.sc-plan-win,
+.sc-plan-lead,
+.sc-plan-rule,
+.sc-plan-danger,
+.sc-plan-fit-copy,
+.sc-plan-fit-alt {
+  font-family: 'Public Sans', sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255,255,255,0.78);
+}
+.sc-plan-summary,
+.sc-plan-win,
+.sc-plan-lead,
+.sc-plan-rules,
+.sc-plan-grid,
+.sc-plan-danger {
+  margin-top: 9px;
+}
+.sc-plan-win strong,
+.sc-plan-lead strong,
+.sc-plan-grid strong,
+.sc-plan-rule strong,
+.sc-plan-danger strong,
+.sc-plan-fit-alt strong {
+  color: #fff;
+  font-weight: 900;
+}
+.sc-plan-lead span,
+.sc-plan-rule span {
+  display: block;
+  color: rgba(255,255,255,0.62);
+  margin-top: 2px;
+}
+.sc-plan-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.sc-plan-chip {
+  display: inline-block;
+  border: 1px solid rgba(245,216,120,0.38);
+  color: #f5d878;
+  padding: 2px 6px;
+  margin: 5px 4px 0 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.sc-plan-chip.muted {
+  color: rgba(255,255,255,0.45);
+  border-color: rgba(255,255,255,0.14);
+}
+.sc-plan-danger {
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding-top: 8px;
+}
+.sc-plan-danger div + div { margin-top: 5px; }
+.sc-plan-fit-banner {
+  border-color: rgba(255,255,255,0.16);
+  margin-top: 0;
+}
+.sc-plan-fit-banner.good { border-left: 4px solid #54d276; }
+.sc-plan-fit-banner.risky { border-left: 4px solid #f5d878; }
+.sc-plan-fit-banner.violates_plan { border-left: 4px solid #ff6b6b; }
+.sc-plan-fit-banner.uncertain { border-left: 4px solid #888; }
+.sc-plan-fit-copy {
+  margin-top: 6px;
+  color: rgba(255,255,255,0.82);
+}
+.sc-plan-fit-alt {
+  margin-top: 8px;
+  color: rgba(255,255,255,0.65);
+}
 
 /* ───────── NOTES + FOOTER ───────── */
 .sc-notes-v2 {

@@ -40,13 +40,10 @@ export interface TcgCardProps {
   trendTag: string;
   hypsTag: string;
   winPct: number;
-  llmExplanation: string;
   /** Includes the recommended move as the first entry (isRecommended:true). */
   moves: AlternativeMove[];
   worstThreat: { name: string; dmgPct: number; isOhko: boolean };
   retreatCost: number;
-  /** Win% history (0-1 scale) for sparkline */
-  sparklineHistory: number[];
   flairChar: string;
 }
 
@@ -82,31 +79,6 @@ function buildOrb(tcgType: string, filled: boolean): HTMLElement {
     el.style.boxShadow = 'none';
   }
   return el;
-}
-
-function buildSparkline(history: number[]): SVGElement {
-  const svgNS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('viewBox', '0 0 200 22');
-  svg.setAttribute('preserveAspectRatio', 'none');
-  if (history.length < 2) return svg;
-  const stepX = 200 / (history.length - 1);
-  const pts = history.map((v, i) => `${i * stepX},${22 - v * 22}`).join(' ');
-  const poly = document.createElementNS(svgNS, 'polyline');
-  poly.setAttribute('points', pts);
-  poly.setAttribute('fill', 'none');
-  poly.setAttribute('stroke', '#fff');
-  poly.setAttribute('stroke-width', '2');
-  poly.setAttribute('stroke-linecap', 'round');
-  svg.appendChild(poly);
-  const lastY = 22 - history[history.length - 1] * 22;
-  const dot = document.createElementNS(svgNS, 'circle');
-  dot.setAttribute('cx', '200');
-  dot.setAttribute('cy', String(lastY));
-  dot.setAttribute('r', '3');
-  dot.setAttribute('fill', '#fff');
-  svg.appendChild(dot);
-  return svg;
 }
 
 /** Format set/card-number flair footer (neutral — no tcgdex API in v1A) */
@@ -160,14 +132,10 @@ export function renderTcgCard(p: TcgCardProps): HTMLElement {
           <span class="flair" style="top:70px;left:70%;font-size:12px;animation-delay:-3.5s">${p.flairChar}</span>
           <span class="flair" style="bottom:80px;right:24px;font-size:16px;animation-delay:-4s">${p.flairChar}</span>
           <div class="sprite-stage"><img alt="" src="${activeSpriteURL}"/></div>
-          <div class="spark-strip">
-            <span class="spark-slot"></span>
+          <div class="confidence-strip">
             <div class="big-conf">${p.winPct}<span class="pct">%</span></div>
           </div>
         </div>
-      </div>
-      <div class="flavor">
-        <span class="ai-tag">AI</span>"${escapeHtml(p.llmExplanation)}"
       </div>
       <div class="moves"></div>
       <div class="bottom">
@@ -191,13 +159,6 @@ export function renderTcgCard(p: TcgCardProps): HTMLElement {
     </div>
   `;
   card.innerHTML = html;
-
-  // Inject sparkline into the .spark-slot placeholder
-  const sparkSlot = card.querySelector('.spark-slot') as HTMLElement | null;
-  if (sparkSlot) {
-    const spark = buildSparkline(p.sparklineHistory);
-    sparkSlot.replaceWith(spark);
-  }
 
   // Type pip in the header trend-slot uses the same energy orb asset as the
   // move rows (e.g. Gholdengo → Metal energy card crop), so the top-right

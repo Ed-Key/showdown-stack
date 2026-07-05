@@ -14,6 +14,7 @@ import {
 } from '../utils/post-mortem';
 import fixture from './fixtures/stepqueue-triplej-loss.json';
 import phase2Fixture from './fixtures/stepqueue-phase2.json';
+import koCreditFixture from './fixtures/stepqueue-ko-credit.json';
 
 const META: ParseMeta = {
   battleId: 'synthetic-1',
@@ -56,7 +57,27 @@ describe('parseBattlePostMortem — happy path', () => {
     rec({
       turn: 1,
       rqid: 1,
-      final: { bestMove: 'Secret Sword', confidence: 0.9, sims: 100, depth: 5, pv: ['you=SECRETSWORD them=BODYSLAM'], alternatives: [] },
+      final: {
+        bestMove: 'Secret Sword',
+        confidence: 0.9,
+        sims: 100,
+        depth: 5,
+        pv: ['you=SECRETSWORD them=BODYSLAM'],
+        alternatives: [],
+        message: 'Hidden-info split.',
+        pimcConsensus: {
+          hypothesisCount: 4,
+          topMove: 'Secret Sword',
+          topMoveVotes: 2,
+          topMoveShare: 0.5,
+          distinctTopMoves: 3,
+          tier: 'split',
+          uncertain: true,
+        },
+        pimcBreakdown: [
+          { top_move: 'Secret Sword', value: 0.7, visit_share: 0.6 },
+        ],
+      },
     }),
     rec({
       turn: 2,
@@ -90,6 +111,17 @@ describe('parseBattlePostMortem — happy path', () => {
     expect(t.turn).toBe(1);
     expect(t.forceSwitch).toBe(false);
     expect(t.myPick.name).toBe('Secret Sword');
+  });
+  it('turn 1: myPick preserves engine uncertainty metadata', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.myPick.message).toBe('Hidden-info split.');
+    expect(t.myPick.pimcConsensus?.tier).toBe('split');
+    expect(t.myPick.pimcConsensus?.topMoveShare).toBe(0.5);
+    expect(t.myPick.pimcBreakdown).toHaveLength(1);
+  });
+  it('turn 1: actualMyAction records the observed move from stepQueue', () => {
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.actualMyAction).toEqual({ kind: 'move', name: 'Secret Sword' });
   });
   it('turn 1: actualOppMove matches stepQueue', () => {
     const t = pm.turns[0] as RegularTurnDiff;
@@ -250,10 +282,38 @@ describe('parseBattlePostMortem — single force-switch', () => {
     expect(fs.forceSwitch).toBe(true);
     expect(fs.myPick.name).toBe('Corviknight');
     expect(fs.myPick.kind).toBe('switch');
+    expect(fs.actualMyAction).toEqual({ kind: 'switch', name: 'Corviknight' });
     expect(fs.faintedBefore?.species).toBe('MyMon');
     expect(fs.faintedBefore?.cause).toBe('Ice Beam');
     expect(fs.switchInTook?.from).toBe('Stealth Rock');
     expect(fs.switchInTook?.hpPctLost).toBe(13);
+  });
+
+  it('prefers lethal residual damage over the last opponent move for faint cause', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Shuckle|100/100',
+      '|switch|p2a: MyMon|Garchomp|24/100 psn',
+      '|turn|1',
+      '|move|p2a: MyMon|Earthquake|p1a: OppMon',
+      '|move|p1a: OppMon|Protect|p1a: OppMon',
+      '|-activate|p1a: OppMon|move: Protect',
+      '|-damage|p2a: MyMon|0 fnt|[from] psn',
+      '|faint|p2a: MyMon',
+      '|switch|p2a: MyMon2|Ogerpon-Wellspring|100/100',
+      '|win|Opp',
+    ];
+    const records: DecisionRecordInput[] = [
+      rec({ turn: 1, rqid: 1, forceSwitch: false, final: { bestMove: 'Earthquake', pv: ['you=EARTHQUAKE them=PROTECT'] } }),
+      rec({ turn: 1, rqid: 2, forceSwitch: true, tStartMs: 1200, final: { bestMove: 'Ogerpon-Wellspring', pv: ['you=OGERPONWELLSPRING them=NOMOVE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const fs = pm.turns[1] as ForceSwitchTurnDiff;
+    expect(fs.faintedBefore).toEqual({ species: 'MyMon', cause: 'psn' });
+    expect(fs.actualMyAction).toEqual({ kind: 'switch', name: 'Ogerpon-Wellspring' });
   });
 });
 
@@ -304,12 +364,150 @@ describe('parseBattlePostMortem — double force-switch', () => {
     // Pick pairing
     expect(fs1.myPick.name).toBe('Blissey');
     expect(fs2.myPick.name).toBe('Corviknight');
+    expect(fs1.actualMyAction).toEqual({ kind: 'switch', name: 'Blissey' });
+    expect(fs2.actualMyAction).toEqual({ kind: 'switch', name: 'Corviknight' });
     // Switch-in took Stealth Rock damage for fs1's replacement (Blissey at cursor 0)
     expect(fs1.switchInTook?.from).toBe('Stealth Rock');
     expect(fs1.switchInTook?.hpPctLost).toBe(13);
     // And for fs2's replacement (Corviknight at cursor 1)
     expect(fs2.switchInTook?.from).toBe('Stealth Rock');
     expect(fs2.switchInTook?.hpPctLost).toBe(13);
+  });
+});
+
+describe('parseBattlePostMortem — actualMyAction', () => {
+  it('records a voluntary switch as the observed action when no move executes', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|100/100',
+      '|turn|1',
+      '|switch|p2a: Wall|Corviknight|100/100',
+      '|move|p1a: OppMon|Body Slam|p2a: Wall',
+      '|-damage|p2a: Wall|82/100',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=BODYSLAM'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.actualMyAction).toEqual({ kind: 'switch', name: 'Corviknight' });
+    expect(t.damageIDealt).toBeNull();
+  });
+
+  it('classifies a species-name regular recommendation as a switch pick', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|poke|p1|Snorlax|',
+      '|poke|p2|Keldeo|',
+      '|poke|p2|Corviknight|',
+      '|start',
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|100/100',
+      '|turn|1',
+      '|switch|p2a: Wall|Corviknight|100/100',
+      '|move|p1a: OppMon|Body Slam|p2a: Wall',
+      '|-damage|p2a: Wall|82/100',
+      '|win|Me',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=BODYSLAM'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.myPick).toMatchObject({ kind: 'switch', name: 'Corviknight' });
+    expect(t.actualMyAction).toEqual({ kind: 'switch', name: 'Corviknight' });
+  });
+
+  it('records prevented when the chosen action never executes before a faint', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Body Slam|p2a: MyMon',
+      '|-damage|p2a: MyMon|0 fnt',
+      '|faint|p2a: MyMon',
+      '|win|Opp',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Secret Sword', pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.actualMyAction).toEqual({ kind: 'prevented', name: null, reason: 'fainted before action (Body Slam)' });
+    expect(t.myPick.name).toBe('Secret Sword');
+  });
+
+  it('records a prevented action when Showdown emits |cant|', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Greninja|100/100',
+      '|switch|p2a: MyMon|Gholdengo|85/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Dark Pulse|p2a: MyMon',
+      '|-supereffective|p2a: MyMon',
+      '|-damage|p2a: MyMon|40/100',
+      '|cant|p2a: MyMon|flinch',
+      '|win|Opp',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Recover', pv: ['you=RECOVER them=DARKPULSE'] } }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    const t = pm.turns[0] as RegularTurnDiff;
+    expect(t.actualMyAction).toEqual({ kind: 'prevented', name: null, reason: 'flinch' });
+    expect(t.failureMessages).toContain('cant: MyMon: flinch');
+    expect(t.damageOppDealt?.move).toBe('Dark Pulse');
+  });
+
+  it('does not treat a forced replacement switch as the regular turn action', () => {
+    const stepQueue = [
+      '|gametype|singles',
+      '|player|p1|Opp|1|',
+      '|player|p2|Me|2|',
+      '|start',
+      '|switch|p1a: OppMon|Snorlax|100/100',
+      '|switch|p2a: MyMon|Keldeo|100/100',
+      '|turn|1',
+      '|move|p1a: OppMon|Body Slam|p2a: MyMon',
+      '|-damage|p2a: MyMon|0 fnt',
+      '|faint|p2a: MyMon',
+      '|switch|p2a: Wall|Corviknight|100/100',
+      '|win|Opp',
+    ];
+    const records = [
+      rec({ turn: 1, rqid: 1, final: { bestMove: 'Secret Sword', pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
+      rec({
+        turn: 1,
+        rqid: 2,
+        forceSwitch: true,
+        tStartMs: 900,
+        final: { bestMove: 'Corviknight', pv: ['you=CORVIKNIGHT them=NOMOVE'] },
+      }),
+    ];
+    const pm = parseBattlePostMortem(records, stepQueue, META);
+    expect(pm.turns).toHaveLength(2);
+    expect(pm.turns[0].forceSwitch).toBe(false);
+    expect(pm.turns[1].forceSwitch).toBe(true);
+    expect((pm.turns[0] as RegularTurnDiff).actualMyAction).toEqual({
+      kind: 'prevented',
+      name: null,
+      reason: 'fainted before action (Body Slam)',
+    });
+    expect((pm.turns[1] as ForceSwitchTurnDiff).actualMyAction).toEqual({ kind: 'switch', name: 'Corviknight' });
   });
 });
 
@@ -449,10 +647,15 @@ describe('parseBattlePostMortem — TripleJ integration', () => {
     const t = pm.turns[0] as RegularTurnDiff;
     expect(t.faints.some(f => f.side === 'mine' && f.species === 'Landorus')).toBe(true);
   });
+  it('credits real fixture Future Sight KO to Slowking-Galar', () => {
+    const slowking = pm.teamPerformance.mine.pokemon['Slowking-Galar'];
+    expect(slowking.koCredit.delayedMoveKos).toBe(1);
+    expect(slowking.kos).toBeGreaterThanOrEqual(1);
+  });
 });
 
-describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
-  it('collapses duplicate rqids keeping the latest complete final', () => {
+describe('parseBattlePostMortem — dedupe duplicate decisions', () => {
+  it('collapses duplicate regular decisions on the same turn keeping the latest complete final', () => {
     const stepQueue = [
       '|gametype|singles',
       '|player|p1|Opp|1|',
@@ -467,7 +670,8 @@ describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
       '|-damage|p2a: MyMon|70/100',
       '|win|Me',
     ];
-    // Three records, two share rqid=7 (one incomplete, one complete). Different rqid=5 is separate.
+    // Multiple regular records can represent the same actual Showdown turn.
+    // Keep one row for analytics, preferring the latest complete final.
     const records: DecisionRecordInput[] = [
       rec({ turn: 0, rqid: 5, final: null }),                       // team-preview scaffold
       rec({ turn: 1, rqid: 5, final: { bestMove: 'Secret Sword', confidence: 0.5, pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
@@ -475,17 +679,10 @@ describe('parseBattlePostMortem — dedupe duplicate rqids', () => {
       rec({ turn: 1, rqid: 7, final: { bestMove: 'Secret Sword', confidence: 0.9, pv: ['you=SECRETSWORD them=BODYSLAM'] } }),
     ];
     const pm = parseBattlePostMortem(records, stepQueue, META);
-    // After dedup: rqid=5 (the complete one, turn=1) + rqid=7 (the complete one) = 2 records.
-    // Parser skips turn=0 (no turn block exists); rqid=5 turn=1 and rqid=7 turn=1 both emit TurnDiffs,
-    // but both live in turn 1's block, so we get 2 TurnDiffs for turn 1.
-    expect(pm.turns).toHaveLength(2);
-    // Both picks should be Secret Sword (complete records won over incomplete ones).
-    for (const t of pm.turns) {
-      expect((t as RegularTurnDiff).myPick.name).toBe('Secret Sword');
-    }
-    // The higher-confidence (rqid=7) record's confidence should be 0.9; the lower (rqid=5) should be 0.5.
-    const confs = pm.turns.map(t => (t as RegularTurnDiff).myPick.confidence).sort();
-    expect(confs).toEqual([0.5, 0.9]);
+    expect(pm.turns).toHaveLength(1);
+    expect((pm.turns[0] as RegularTurnDiff).rqid).toBe(7);
+    expect((pm.turns[0] as RegularTurnDiff).myPick.name).toBe('Secret Sword');
+    expect((pm.turns[0] as RegularTurnDiff).myPick.confidence).toBe(0.9);
   });
 
   it('keeps the only record when no complete final exists', () => {
@@ -645,6 +842,165 @@ describe('parseBattlePostMortem — schema current', () => {
     const t = pm.turns[0] as RegularTurnDiff;
     expect(Array.isArray(t.residualEvents)).toBe(true);
     expect(t.residualEvents).toEqual([]);
+  });
+});
+
+describe('parseBattlePostMortem — team performance stats', () => {
+  const stepQueue = [
+    '|gametype|singles',
+    '|player|p1|Opp|1|',
+    '|player|p2|Me|2|',
+    '|clearpoke',
+    '|poke|p1|Landorus-Therian, M|',
+    '|poke|p1|Corviknight, M|',
+    '|poke|p2|Volcarona, F|',
+    '|poke|p2|Garchomp, M|',
+    '|poke|p2|Iron Valiant|',
+    '|teampreview',
+    '|start',
+    '|switch|p1a: OppLead|Landorus-Therian|100/100',
+    '|switch|p2a: Volcarona|Volcarona|100/100',
+    '|turn|1',
+    '|move|p2a: Volcarona|Fiery Dance|p1a: OppLead',
+    '|-damage|p1a: OppLead|60/100',
+    '|move|p1a: OppLead|Stone Edge|p2a: Volcarona',
+    '|-damage|p2a: Volcarona|70/100',
+    '|turn|2',
+    '|switch|p2a: Garchomp|Garchomp|100/100',
+    '|-damage|p2a: Garchomp|88/100|[from] Stealth Rock',
+    '|move|p1a: OppLead|Earthquake|p2a: Garchomp',
+    '|-damage|p2a: Garchomp|40/100',
+    '|turn|3',
+    '|move|p1a: OppLead|Ice Beam|p2a: Garchomp',
+    '|-damage|p2a: Garchomp|0 fnt',
+    '|faint|p2a: Garchomp',
+    '|switch|p2a: Iron Valiant|Iron Valiant|100/100',
+    '|turn|4',
+    '|cant|p2a: Iron Valiant|par',
+    '|move|p1a: OppLead|U-turn|p2a: Iron Valiant',
+    '|-damage|p2a: Iron Valiant|75/100',
+    '|turn|5',
+    '|move|p2a: Iron Valiant|Close Combat|p1a: OppLead',
+    '|-damage|p1a: OppLead|0 fnt',
+    '|faint|p1a: OppLead',
+    '|win|Me',
+  ];
+  const records: DecisionRecordInput[] = [
+    rec({
+      turn: 1,
+      rqid: 1,
+      final: { bestMove: 'Fiery Dance', confidence: 0.9, sims: 100, depth: 5, pv: ['you=FIERYDANCE them=STONEEDGE'] },
+    }),
+    rec({
+      turn: 2,
+      rqid: 2,
+      final: { bestMove: 'Garchomp', confidence: 0.8, sims: 100, depth: 5, pv: ['you=GARCHOMP them=EARTHQUAKE'] },
+    }),
+    rec({
+      turn: 3,
+      rqid: 3,
+      final: { bestMove: 'Earthquake', confidence: 0.72, sims: 100, depth: 5, pv: ['you=EARTHQUAKE them=STONEEDGE'] },
+    }),
+    rec({
+      turn: 4,
+      rqid: 4,
+      final: { bestMove: 'Close Combat', confidence: 0.7, sims: 100, depth: 5, pv: ['you=CLOSECOMBAT them=UTURN'] },
+    }),
+    rec({
+      turn: 5,
+      rqid: 5,
+      final: { bestMove: 'Close Combat', confidence: 0.93, sims: 100, depth: 5, pv: ['you=CLOSECOMBAT them=UTURN'] },
+    }),
+  ];
+
+  const pm = parseBattlePostMortem(records, stepQueue, META);
+  const stats = pm.teamPerformance.mine.pokemon;
+
+  it('records exact team leads from switch events', () => {
+    expect(pm.teamPerformance.mine.lead).toBe('Volcarona');
+    expect(pm.teamPerformance.opp.lead).toBe('Landorus-Therian');
+    expect(stats.Volcarona.led).toBe(true);
+  });
+
+  it('records survival and faint timing per Pokemon', () => {
+    expect(stats.Volcarona.survived).toBe(true);
+    expect(stats.Garchomp.survived).toBe(false);
+    expect(stats.Garchomp.fainted).toBe(true);
+    expect(stats.Garchomp.faintTurn).toBe(3);
+  });
+
+  it('records switch-in and forced replacement counts', () => {
+    expect(stats.Volcarona.switchIns).toBe(1);
+    expect(stats.Garchomp.switchIns).toBe(1);
+    expect(stats['Iron Valiant'].switchIns).toBe(1);
+    expect(stats['Iron Valiant'].forcedSwitchIns).toBe(1);
+  });
+
+  it('records visible HP pressure by source category', () => {
+    expect(stats.Garchomp.fieldPressure.hazardHpLost).toBe(12);
+    expect(stats.Garchomp.fieldPressure.totalHpLost).toBe(12);
+    expect(stats.Garchomp.fieldPressure.events).toBe(1);
+  });
+
+  it('records visible direct damage, healing-independent targeting, and KOs', () => {
+    expect(stats.Volcarona.directDamageDealtPct).toBe(40);
+    expect(stats.Volcarona.directDamageTakenPct).toBe(30);
+    expect(stats.Garchomp.directDamageTakenPct).toBe(88);
+    expect(stats['Iron Valiant'].directDamageTakenPct).toBe(25);
+    expect(stats['Iron Valiant'].directDamageDealtPct).toBe(60);
+    expect(stats['Iron Valiant'].timesTargeted).toBe(1);
+    expect(stats['Iron Valiant'].kos).toBe(1);
+    expect(stats['Iron Valiant'].koCredit.directKos).toBe(1);
+  });
+
+  it('records engine/player calibration stats by active Pokemon', () => {
+    expect(stats.Volcarona.decisionTurns).toBe(2);
+    expect(stats.Volcarona.engineWantedSwitchOutCount).toBe(1);
+    expect(stats.Garchomp.engineWantedSwitchIntoCount).toBe(1);
+    expect(stats.Garchomp.actionPreventedCount).toBe(1);
+    expect(stats.Garchomp.highConfidenceDisagreements).toBe(1);
+    expect(stats['Iron Valiant'].actionPreventedCount).toBe(1);
+    expect(stats['Iron Valiant'].highConfidenceDisagreements).toBe(1);
+  });
+
+  it('documents metric caveats for dashboard display', () => {
+    expect(pm.teamPerformance.mine.caveats.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('parseBattlePostMortem — KO credit attribution', () => {
+  const pm = parseBattlePostMortem(
+    koCreditFixture.scHistoryForBattle as DecisionRecordInput[],
+    koCreditFixture.stepQueue,
+    {
+      battleId: koCreditFixture.meta.battleId,
+      format: koCreditFixture.meta.format,
+      myUsername: koCreditFixture.meta.myUsername,
+      mySideId: koCreditFixture.meta.mySideId as 'p1' | 'p2',
+      opponent: koCreditFixture.meta.opponent,
+    },
+  );
+
+  it('credits direct, hazard, status, delayed-move, and pressure KOs from fixture logs', () => {
+    const stats = pm.teamPerformance.mine.pokemon;
+
+    expect(stats['Landorus-Therian'].koCredit.hazardKos).toBe(1);
+    expect(stats.Volcarona.koCredit.pressureKos).toBe(1);
+    expect(stats.Toxapex.koCredit.statusKos).toBe(1);
+    expect(stats['Slowking-Galar'].koCredit.delayedMoveKos).toBe(1);
+    expect(stats['Iron Valiant'].koCredit.directKos).toBe(1);
+    expect(stats['Iron Valiant'].kos).toBe(1);
+    expect(stats['Slowking-Galar'].kos).toBe(1);
+  });
+
+  it('fixture contains source-to-zero lines for hazard and status KO validation', () => {
+    const sourceKos = koCreditFixture.stepQueue.filter(line =>
+      line.startsWith('|-damage|') && line.includes('0 fnt') && line.includes('[from]')
+    );
+    expect(sourceKos).toEqual([
+      '|-damage|p1a: Charizard|0 fnt|[from] Stealth Rock',
+      '|-damage|p1a: Blissey|0 fnt|[from] psn',
+    ]);
   });
 });
 
@@ -1004,7 +1360,7 @@ describe('parseBattlePostMortem — Phase 2 integration', () => {
   });
 });
 
-describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
+describe('parseBattlePostMortem — annotation fields (schema v7)', () => {
   const stepQueue = [
     '|gametype|singles',
     '|player|p1|Opp|1|',
@@ -1028,8 +1384,8 @@ describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
 
   const pm = parseBattlePostMortem(records, stepQueue, META);
 
-  it('schemaVersion is 6', () => {
-    expect(pm.schemaVersion).toBe(6);
+  it('schemaVersion is current', () => {
+    expect(pm.schemaVersion).toBe(POSTMORTEM_SCHEMA_VERSION);
   });
   it('battleNote defaults to null on a fresh postmortem', () => {
     expect(pm.battleNote).toBeNull();
@@ -1062,6 +1418,11 @@ describe('parseBattlePostMortem — annotation fields (schema v6)', () => {
   it('engineUpdates is a summary object on each turn diff (zero when record.updates absent)', () => {
     for (const t of pm.turns) {
       expect(t.engineUpdates).toEqual({ flipCount: 0, sequence: [], eventCount: 0 });
+    }
+  });
+  it('actualMyAction is present on each turn diff', () => {
+    for (const t of pm.turns) {
+      expect(t.actualMyAction).toEqual({ kind: 'move', name: 'Secret Sword' });
     }
   });
   it('engineUpdates summarizes record.updates when provided (full events live in engine.log)', () => {

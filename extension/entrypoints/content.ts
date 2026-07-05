@@ -14,16 +14,20 @@ import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { detectConflict, type ConflictWarning } from '../lib/conflict';
 import { fetchExplanation } from '../lib/explainer';
+import { fetchPreviewPlan, previewPokemonFromSnapshot } from '../lib/preview-plan-client';
+import { evaluatePlanFit } from '../lib/plan-fit';
+import type { MatchupPlan, PlanFitResult, PreviewPlanResponse } from '../lib/matchup-plan';
 import {
   appendVal, computeTrend, formatTrendArrow, formatTrendTitle, isDesperate,
-  renderSparkline, computeTrendArrow,
+  computeTrendArrow,
   type Trend,
 } from '../lib/val-trend';
 import { renderTcgCard, type TcgCardProps, type AlternativeMove } from '../panels/tcg-card';
 import { getMoveType, getPokemonPrimaryType, isSwitchOption } from '../lib/showdown-dex';
 import { renderConflictBanner, type ConflictBannerProps, type ConflictSeverity } from '../panels/conflict-banner';
-import { renderThreatsPanel, type ThreatRow as PanelThreatRow } from '../panels/threats-panel';
 import { renderPvChain, type PvStep } from '../panels/pv-chain';
+import { renderMatchupPlanCard, renderMatchupPlanLoading } from '../panels/matchup-plan-card';
+import { renderPlanFitBanner } from '../panels/plan-fit-banner';
 import { mountOrReplace } from '../lib/panel-mount';
 import { escapeHtml } from '../panels/_shared';
 import {
@@ -59,6 +63,17 @@ export default defineContentScript({
     // opp-Pokemon overlays. If the proxy isn't running the request fails;
     // start it with `python -m showdown_copilot.proxy`. To bypass the proxy
     // entirely (e.g., when only the engine is running), point this at :7267.
+    const PREVIEW_PLAN_PRESET_STORAGE_KEY = 'showdownCopilot.previewPlanPresetId';
+    const DEFAULT_PREVIEW_PLAN_PRESET_ID = 'anthropic-sonnet-46-high';
+
+    function configuredPreviewPlanPresetId(): string {
+      try {
+        const stored = localStorage.getItem(PREVIEW_PLAN_PRESET_STORAGE_KEY);
+        return stored?.trim() || DEFAULT_PREVIEW_PLAN_PRESET_ID;
+      } catch {
+        return DEFAULT_PREVIEW_PLAN_PRESET_ID;
+      }
+    }
 
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
@@ -102,6 +117,7 @@ export default defineContentScript({
     const notesToggleEl = panel.querySelector<HTMLSpanElement>('.sc-notes-toggle')!;
     const battleNoteTextarea = panel.querySelector<HTMLTextAreaElement>('.sc-battle-note')!;
     const pimcPinnedEl = panel.querySelector<HTMLDivElement>('.sc-pimc-pinned')!;
+    const pinnedEl = panel.querySelector<HTMLDivElement>('.sc-pinned')!;
 
     // ---- Status overlay (TCG dashboard) --------------------------------
     // Banner above the TCG card for force-switch / engine-error / lead-pick
@@ -197,35 +213,22 @@ export default defineContentScript({
       return 'POSSIBLE'; // 'warn' and 'info' both map here
     }
 
-    function toPanelThreatRow(t: any): PanelThreatRow {
-      // Pick the worst victim from the legacy Threat.victims list — the
-      // panel renders one row per (move, source, target) tuple so we
-      // collapse the victim list to its top-damage entry.
-      const worst = (t?.victims ?? []).slice().sort(
-        (a: any, b: any) => (b?.dmgPct ?? 0) - (a?.dmgPct ?? 0),
-      )[0];
-      return {
-        move: String(t?.oppMove ?? ''),
-        source: String(t?.oppSpecies ?? ''),
-        target: String(worst?.species ?? ''),
-        dmgPct: Math.round(worst?.dmgPct ?? 0),
-        isOhko: !!worst?.ohko,
-        source_seen: t?.moveSource === 'revealed',
-      };
-    }
-
     // ---- Damage matrix (data only — UI superseded by TCG card) ---------
     // Computes opp→us damage % per (attacker, defender) pair, via
     // @smogon/calc with belief-driven move/item/spread choices. The legacy
     // expandable matrix card was removed in the TCG dashboard redesign;
-    // `lastMatrix` is still populated because the new threats panel +
-    // TCG card bottom strip + LLM explainer summary all read it.
+    // `lastMatrix` is still populated because the TCG card bottom strip,
+    // conflict warning, and coach summaries all read it.
     let lastMatrix: DamageMatrix | null = null;
     /** Mine-attacks-opp direction. Powers the safe-switch chips'
      *  "best move back" lookup in the conflict banner. Built alongside
      *  lastMatrix in refreshMatrix; null when teams aren't ready. */
     let lastMeAttacksMatrix: DamageMatrix | null = null;
     let lastBeliefSnapshot: BeliefSnapshot | null = null;
+    const matchupPlansByBattle = new Map<string, PreviewPlanResponse>();
+    const matchupPlanRequests = new Set<string>();
+    let lastPlanFit: PlanFitResult | null = null;
+    const MATCHUP_PLAN_RENDER_TURN_LIMIT = 1;
 
     async function refreshMatrix(b: any, br: any): Promise<void> {
       if (!b || !br?.id) return;
@@ -296,6 +299,172 @@ export default defineContentScript({
       });
     }
 
+    function currentMatchupPlan(battleId?: string): MatchupPlan | null {
+      if (!battleId) return null;
+      return matchupPlansByBattle.get(battleId)?.plan ?? null;
+    }
+
+    function currentBattlePreviewState(battleId: string): {
+      sameBattle: boolean;
+      ended: boolean;
+      turn: number;
+      teamPreview: boolean;
+    } {
+      const cur = win.app?.curRoom;
+      const battle = cur?.battle;
+      const req = cur?.request || battle?.request;
+      return {
+        sameBattle: cur?.id === battleId,
+        ended: !!battle?.ended,
+        turn: Number(battle?.turn ?? 0),
+        teamPreview: !!req?.teamPreview,
+      };
+    }
+
+    function shouldRenderMatchupPlan(battleId: string): boolean {
+      const state = currentBattlePreviewState(battleId);
+      if (!state.sameBattle || state.ended) return false;
+      return state.teamPreview || state.turn <= MATCHUP_PLAN_RENDER_TURN_LIMIT;
+    }
+
+    function mountMatchupPlanCard(el: HTMLElement): void {
+      mountOrReplace(pinnedEl, {
+        newEl: el,
+        replaceTargets: ['.sc-matchup-plan-card'],
+        anchors: [
+          { selector: '.sc-status-overlay', position: 'after' },
+          { selector: '.sc-header', position: 'after' },
+        ],
+        fallback: (root, newEl) => root.prepend(newEl),
+      });
+    }
+
+    function removeMatchupPlanCard(): void {
+      pinnedEl.querySelector('.sc-matchup-plan-card')?.remove();
+    }
+
+    function mountPlanFit(result: PlanFitResult | null): void {
+      if (!result || result.rating === 'good') {
+        pinnedEl.querySelector('.sc-plan-fit-banner')?.remove();
+        return;
+      }
+      const banner = renderPlanFitBanner(result);
+      mountOrReplace(pinnedEl, {
+        newEl: banner,
+        replaceTargets: ['.sc-plan-fit-banner'],
+        anchors: [{ selector: '.sc-tcg-card', position: 'before' }],
+        fallback: (root, newEl) => root.prepend(newEl),
+      });
+    }
+
+    function requestMatchupPlan(
+      b: any,
+      br: any,
+      mySnaps: any[],
+      oppSnaps: any[],
+    ): void {
+      const battleId = String(br?.id ?? '');
+      if (!battleId || !mySnaps.length || !oppSnaps.length) return;
+      const cached = matchupPlansByBattle.get(battleId);
+      if (cached) {
+        if (shouldRenderMatchupPlan(battleId)) {
+          mountMatchupPlanCard(renderMatchupPlanCard(cached));
+        }
+        return;
+      }
+      if (matchupPlanRequests.has(battleId)) {
+        if (shouldRenderMatchupPlan(battleId)) {
+          mountMatchupPlanCard(renderMatchupPlanLoading('Building matchup plan...'));
+        }
+        return;
+      }
+
+      matchupPlanRequests.add(battleId);
+      if (shouldRenderMatchupPlan(battleId)) {
+        mountMatchupPlanCard(renderMatchupPlanLoading('Building matchup plan...'));
+      }
+      const startedAtMs = Date.now();
+      console.log('[sc:preview-plan] request start', {
+        battleId,
+        turn: currentBattlePreviewState(battleId).turn,
+        myTeam: mySnaps.map((p: any) => p.species),
+        opponentTeam: oppSnaps.map((p: any) => p.species),
+        presetId: configuredPreviewPlanPresetId(),
+      });
+      fetchPreviewPlan(PROXY_BASE_URL, {
+        battleId,
+        format: String(b?.tier || 'gen9nationaldex'),
+        myTeam: mySnaps.map(previewPokemonFromSnapshot),
+        opponentTeam: oppSnaps
+          .map((p: any) => String(p?.species ?? ''))
+          .filter(Boolean),
+        teamStats: { source: 'live-team-preview' },
+        presetId: configuredPreviewPlanPresetId(),
+        runMode: 'auto',
+      }).then((response) => {
+        matchupPlanRequests.delete(battleId);
+        if (!response) {
+          console.log('[sc:preview-plan] unavailable', {
+            battleId,
+            latencyMs: Date.now() - startedAtMs,
+            state: currentBattlePreviewState(battleId),
+          });
+          if (shouldRenderMatchupPlan(battleId)) {
+            mountMatchupPlanCard(renderMatchupPlanLoading('Matchup plan unavailable.'));
+          } else {
+            removeMatchupPlanCard();
+          }
+          return;
+        }
+        matchupPlansByBattle.set(battleId, response);
+        const state = currentBattlePreviewState(battleId);
+        console.log('[sc:preview-plan] response', {
+          battleId,
+          latencyMs: Date.now() - startedAtMs,
+          source: response.source,
+          provider: response.provider,
+          model: response.model,
+          fallbackReason: response.fallbackReason,
+          state,
+        });
+        if (!shouldRenderMatchupPlan(battleId)) {
+          console.log('[sc:preview-plan] skipped stale render', { battleId, state });
+          removeMatchupPlanCard();
+          return;
+        }
+        mountMatchupPlanCard(renderMatchupPlanCard(response));
+      }).catch((err) => {
+        matchupPlanRequests.delete(battleId);
+        console.warn('[sc:preview-plan] request failed', err);
+        if (shouldRenderMatchupPlan(battleId)) {
+          mountMatchupPlanCard(renderMatchupPlanLoading('Matchup plan failed.'));
+        } else {
+          removeMatchupPlanCard();
+        }
+      });
+    }
+
+    function requestMatchupPlanFromBattle(b: any, br: any): void {
+      if (!b || !br?.id || currentMatchupPlan(String(br.id))) {
+        return;
+      }
+      if (Number(b.turn ?? 0) > MATCHUP_PLAN_RENDER_TURN_LIMIT) {
+        if (matchupPlanRequests.has(String(br.id))) {
+          removeMatchupPlanCard();
+        }
+        return;
+      }
+      if (matchupPlanRequests.has(String(br.id))) {
+        return;
+      }
+      const myActiveLive = b.mySide?.active?.[0] ?? null;
+      const mySnaps = (b.myPokemon || []).map((p: any) =>
+        buildMyPokemon(p, null, win, myActiveLive));
+      const oppSnaps = (b.farSide?.pokemon || []).map((p: any) => buildOppPokemon(p, win));
+      if (!mySnaps.length || !oppSnaps.length) return;
+      requestMatchupPlan(b, br, mySnaps, oppSnaps);
+    }
+
     // ---- PIMC vote breakdown (data only — UI superseded by energy orbs) -
     // Per-hypothesis vote distribution from the PIMC proxy mode (only
     // populated when POKE_PROXY_PIMC_K > 0 and the engine emits
@@ -316,13 +485,13 @@ export default defineContentScript({
     const valHistoryByBattle = new Map<string, number[]>();
     const lastTrackedTurnByBattle = new Map<string, number>();
 
-    // ---- Explainer (data only — UI superseded by TCG flavor strip) -----
+    // ---- Explainer (data only — persisted for post-battle analysis) -----
     // LLM-rendered explanation of the engine's recommendation in plain
     // English. Fired once per engine `final` event, with the matrix
     // top-cells summary so the LLM can spot conflicts (engine recommends
     // stay-in but matrix says we get OHKO'd, etc.). Cached on
     // (battleId, turn, rqid) by lib/explainer.ts. Surfaced as a one-line
-    // flavor strip on the TCG card.
+    // coach summaries.
     let lastExplanation: string | null = null;
     let explainerLoading = false;
 
@@ -578,13 +747,108 @@ export default defineContentScript({
 
     const dumpedBattleIds = new Set<string>();
 
-    function persistPostMortem(pm: BattlePostMortem, opts?: { final?: boolean }): void {
+    function stepQueueHasBattleEnd(stepQueue: unknown): boolean {
+      return Array.isArray(stepQueue) && stepQueue.some(line =>
+        typeof line === 'string' && (
+          line.startsWith('|win|') ||
+          line === '|tie' ||
+          line.startsWith('|tie|')
+        ),
+      );
+    }
+
+    function buildPostMortemForBattle(battleId: string, b: any): BattlePostMortem {
+      const battleRecords = scHistory.filter(r => r.battleId === battleId);
+      const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
+      return parseBattlePostMortem(
+        battleRecords as any,
+        (b.stepQueue || []).slice(),
+        {
+          battleId,
+          format: b.tier || 'unknown',
+          myUsername: b.mySide?.name || 'unknown',
+          mySideId,
+          opponent: b.farSide?.name || 'unknown',
+        },
+      );
+    }
+
+    function persistBattleSnapshot(
+      battleId: string | null | undefined,
+      b: any,
+      opts?: { final?: boolean; winner?: string | null; reason?: string },
+    ): void {
+      if (!battleId || !b) return;
+      try {
+        const pm = buildPostMortemForBattle(battleId, b);
+        const label = opts?.final ? 'final' : 'soft';
+        const reason = opts?.reason ? ` ${opts.reason}` : '';
+        console.log(`[sc:postmortem] ${label}${reason}: ${scHistory.filter(r => r.battleId === battleId).length} records → ${pm.turns.length} turns in pm`);
+        persistPostMortem(pm, { final: opts?.final, winner: opts?.winner });
+      } catch (err) {
+        console.warn('[sc:postmortem] persist failed', err);
+      }
+    }
+
+    function activeBattleRoom(): { roomId: string; battle: any } | null {
+      const room = win.app?.curRoom;
+      const battle = room?.battle;
+      if (!room?.id || !String(room.id).startsWith('battle-') || !battle) return null;
+      return { roomId: room.id, battle };
+    }
+
+    function persistForfeitLossFromSnapshot(
+      active: { roomId: string; battle: any } | null,
+      reason: string,
+    ): void {
+      if (!active || dumpedBattleIds.has(active.roomId)) return;
+      const winner = active.battle?.winner || active.battle?.farSide?.name || null;
+      if (!winner) return;
+      persistBattleSnapshot(active.roomId, active.battle, {
+        final: true,
+        winner,
+        reason,
+      });
+      dumpedBattleIds.add(active.roomId);
+      console.log(`[sc:postmortem] dumped forfeit loss for ${active.roomId} winner=${winner}`);
+    }
+
+    function persistForfeitLoss(reason: string): void {
+      persistForfeitLossFromSnapshot(activeBattleRoom(), reason);
+    }
+
+    function installForfeitCapture(): void {
+      const app = win.app;
+      if (!app || app.__scForfeitCaptureInstalled || typeof app.send !== 'function') return;
+      const originalSend = app.send;
+      app.send = function scSendWithForfeitCapture(this: unknown, ...args: any[]) {
+        const firstArg = args[0];
+        const command = typeof firstArg === 'string' ? firstArg : '';
+        const isForfeit = /(^|\n)\/forfeit(\s|$)/i.test(command);
+        const activeBeforeSend = isForfeit ? activeBattleRoom() : null;
+        const result = originalSend.apply(this, args);
+        if (isForfeit) {
+          persistForfeitLossFromSnapshot(activeBeforeSend, 'forfeit-command');
+          window.setTimeout(() => persistForfeitLoss('forfeit-command-delayed'), 250);
+        }
+        return result;
+      };
+      app.__scForfeitCaptureInstalled = true;
+      console.log('[sc:postmortem] installed forfeit capture hook');
+    }
+
+    function persistPostMortem(
+      pm: BattlePostMortem,
+      opts?: { final?: boolean; winner?: string | null; endedAtMs?: number },
+    ): void {
       // `final` defaults to true so the existing battle-end caller is unchanged.
       // Soft-persist callers (per-turn) pass `final: false` to write to
-      // localStorage only and skip the disk POST — the proxy filename uses
-      // `endedAtMs` which is 0/missing mid-battle, so a disk POST per turn
-      // would pollute the archive with intermediate snapshots.
-      const isFinal = opts?.final !== false;
+      // localStorage as an in-progress snapshot. Disk mirroring still happens,
+      // but unfinished posts are stamped with endedAtMs=0 so analytics can
+      // distinguish them from completed battle dumps.
+      if (opts?.winner && !pm.winner) pm.winner = opts.winner;
+      const isFinal = opts?.final !== false || !!pm.winner;
+      pm.endedAtMs = isFinal ? (opts?.endedAtMs ?? Date.now()) : 0;
       // Overlay any in-battle annotations from temp localStorage keys
       // onto the parsed post-mortem before persisting.
       const turnNotes = readTurnNotes(pm.battleId);
@@ -625,7 +889,9 @@ export default defineContentScript({
         body: json,
         keepalive: true,
       }).catch(() => { /* proxy down — localStorage still has it */ });
-      // `isFinal` is now informational only; both branches fire the same POST.
+      // `isFinal` controls only metadata; both branches fire the same POST so
+      // the disk archive has a recoverable latest snapshot even if the tab
+      // disappears before Showdown's battle-end signal is observed.
       void isFinal;
 
       try {
@@ -711,19 +977,8 @@ export default defineContentScript({
       }
       try {
         const battleRecords = scHistory.filter(r => r.battleId === room.id);
-        const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
-        const pm = parseBattlePostMortem(
-          battleRecords as any,
-          (b.stepQueue || []).slice(),
-          {
-            battleId: room.id,
-            format: b.tier || 'unknown',
-            myUsername: b.mySide?.name || 'unknown',
-            mySideId,
-            opponent: b.farSide?.name || 'unknown',
-          },
-        );
-        persistPostMortem(pm, { final: true });
+        const pm = buildPostMortemForBattle(room.id, b);
+        persistPostMortem(pm, { final: true, winner: b.winner || undefined });
         return {
           ok: true,
           scHistoryRecords: battleRecords.length,
@@ -828,7 +1083,6 @@ export default defineContentScript({
       u: any,
       battle: any,
       valHistory: number[],
-      llmExplanation: string,
       threats: ThreatsReport | null,
     ): TcgCardProps {
       const trend = computeTrendArrow(valHistory);
@@ -934,11 +1188,9 @@ export default defineContentScript({
           ? `${u.pimcBreakdown.length} HYPS`
           : 'SINGLE',
         winPct: Math.round((u.confidence ?? 0) * 100),
-        llmExplanation: llmExplanation || 'Analyzing turn…',
         moves,
         worstThreat,
         retreatCost: 2,
-        sparklineHistory: valHistory,
         flairChar: flairByType[activeType] ?? '◆',
       };
     }
@@ -1002,21 +1254,10 @@ export default defineContentScript({
         ? ` <span class="sc-desperate" title="engine is recommending the least-bad move from a losing position. Consider sacrificing this mon or switching out.">DESPERATE</span>`
         : '';
 
-      // Sparkline of recent val samples. Only meaningful on `final` events
-      // (we don't pollute history with mid-search intermediate values, so
-      // showing one for streamed updates would be stale/misleading). On
-      // turn 1 the helper renders a neutral em-dash placeholder so the
-      // confidence line doesn't reflow when the chart appears on turn 2.
-      let sparklineHtml = '';
-      if (u.event === 'final' && battleId) {
-        const hist = valHistoryByBattle.get(battleId) ?? [];
-        sparklineHtml = ' ' + renderSparkline(hist);
-      }
-
       // New TCG card rendering — replaces the inline .sc-best HTML write.
       // On first call we swap the legacy .sc-best element with the card; on
       // subsequent calls we replace the existing card in place. The val-
-      // history map populated above on `final` events feeds the sparkline.
+      // history map populated above on `final` events feeds trend tags.
       //
       // Task 11 redirected the 7 legacy bestEl.innerHTML write sites to
       // ensureStatusOverlay() so force-switch / engine-error / lead-pick /
@@ -1030,11 +1271,22 @@ export default defineContentScript({
         const valHist = battleIdForCard
           ? (valHistoryByBattle.get(battleIdForCard) ?? [])
           : [];
+        const matchupPlan = currentMatchupPlan(battleIdForCard);
+        const planFit = matchupPlan
+          ? evaluatePlanFit({
+              plan: matchupPlan,
+              turn: battleForCard?.turn ?? 0,
+              action: String(u.bestMove ?? ''),
+              alternatives: u.alternatives ?? [],
+              myActive: battleForCard?.mySide?.active?.[0],
+              oppActive: battleForCard?.farSide?.active?.[0],
+            })
+          : null;
+        lastPlanFit = planFit;
         const tcgProps = buildTcgPropsFromUpdate(
           u,
           battleForCard,
           valHist,
-          '',                       // LLM explanation — Tasks 8+ wire this in
           lastThreats ?? null,
         );
         const newCard = renderTcgCard(tcgProps);
@@ -1045,33 +1297,14 @@ export default defineContentScript({
           newEl: newCard,
           replaceTargets: ['.sc-tcg-card', '.sc-best'],
         });
+        mountPlanFit(planFit);
       }
 
-      // ---- Threats panel (Task 11) ---------------------------------------
-      // Replaces the legacy expandable .sc-trainer-card / threats card body.
-      // Reads from `lastThreats` (populated by refreshThreats elsewhere).
-      // Mounted directly after the TCG card inside .sc-pinned so the user
-      // sees the worst-case opp moves immediately under the recommendation.
-      {
-        const threatsProps = {
-          onField: (lastThreats?.onField ?? []).map(toPanelThreatRow),
-          incoming: (lastThreats?.incoming ?? []).map(toPanelThreatRow),
-        };
-        const newThreats = renderThreatsPanel(threatsProps);
-        // Mount ABOVE the TCG card so the "what's about to kill you"
-        // signal is the first thing the user sees — threats are the
-        // emergency layer; the recommendation comes after.
-        mountOrReplace(panel, {
-          newEl: newThreats,
-          replaceTargets: ['.sc-trainer-card'],
-          anchors: [{ selector: '.sc-tcg-card', position: 'before' }],
-        });
-        attachPanelToggle(newThreats, '.trainer-header', 'sc-threats-collapsed');
-      }
+      panel.querySelector('.sc-trainer-card')?.remove();
 
       // ---- PV chain (Task 11) --------------------------------------------
-      // Inline engine principal-variation chain. Mounted below the threats
-      // panel so the eye moves: recommended move → threats → engine line.
+      // Inline engine principal-variation chain. Mounted below the TCG card
+      // so the recommendation remains the primary visible surface.
       // Steps alternate me/opp by index (engine PV interleaves sides).
       {
         const pvList: any[] = Array.isArray(u?.pv) ? u.pv : [];
@@ -1085,12 +1318,10 @@ export default defineContentScript({
             depth: typeof u.depth === 'number' ? u.depth : 0,
             sims: typeof u.sims === 'number' ? u.sims : 0,
           });
-          // PV chain sits immediately after the threats panel, so the eye
-          // moves: threats → engine line → recommendation.
           mountOrReplace(panel, {
             newEl: newPv,
             replaceTargets: ['.sc-pv-card'],
-            anchors: [{ selector: '.sc-trainer-card', position: 'after' }],
+            anchors: [{ selector: '.sc-tcg-card', position: 'after' }],
           });
           attachPanelToggle(newPv, '.pv-header', 'sc-pv-collapsed');
         }
@@ -1294,31 +1525,7 @@ export default defineContentScript({
             scHistory.push(stub);
           }
         }
-        // Soft-persist the in-progress postmortem so navigating away mid-battle
-        // doesn't lose data. Disk POST happens too (Fix B 2026-05-08:
-        // proxy /postmortem detects same-battleId and overwrites — per-turn
-        // POSTs converge to one file per battle).
-        if (b && battleId) {
-          try {
-            const battleRecords = scHistory.filter(r => r.battleId === battleId);
-            const mySideId = (b.mySide?.sideid || b.mySide?.id || 'p1') as 'p1' | 'p2';
-            const pm = parseBattlePostMortem(
-              battleRecords as any,
-              (b.stepQueue || []).slice(),
-              {
-                battleId,
-                format: b.tier || 'unknown',
-                myUsername: b.mySide?.name || 'unknown',
-                mySideId,
-                opponent: b.farSide?.name || 'unknown',
-              },
-            );
-            console.log(`[sc:postmortem] soft persist: ${battleRecords.length} records → ${pm.turns.length} turns in pm`);
-            persistPostMortem(pm, { final: false });
-          } catch (err) {
-            console.warn('[sc:postmortem] soft persist failed', err);
-          }
-        }
+        persistBattleSnapshot(battleId, b, { final: false, reason: 'engine-final' });
       }
       if (!record) return;
       record.updates.push(u);
@@ -1531,6 +1738,7 @@ export default defineContentScript({
     };
 
     setInterval(() => {
+      installForfeitCapture();
       const rooms = win.app?.rooms;
       if (!rooms) { trace('no-rooms'); return; }
       // Dump post-mortems for any ended battle rooms we haven't dumped yet.
@@ -1538,24 +1746,17 @@ export default defineContentScript({
       // battles — otherwise ended battles are never observed by this loop.
       for (const [roomId, room] of Object.entries(rooms)) {
         const eb = (room as any)?.battle;
-        if (!eb?.ended || !roomId.startsWith('battle-') || dumpedBattleIds.has(roomId)) continue;
+        const protocolEnded = stepQueueHasBattleEnd(eb?.stepQueue);
+        const winnerEnded = typeof eb?.winner === 'string' && eb.winner.length > 0;
+        if ((!eb?.ended && !protocolEnded && !winnerEnded) || !roomId.startsWith('battle-') || dumpedBattleIds.has(roomId)) continue;
         try {
-          const battleRecords = scHistory.filter(r => r.battleId === roomId);
-          const mySideId = (eb.mySide?.sideid || eb.mySide?.id || 'p1') as 'p1' | 'p2';
-          const pm = parseBattlePostMortem(
-            battleRecords as any,
-            (eb.stepQueue || []).slice(),
-            {
-              battleId: roomId,
-              format: eb.tier || 'unknown',
-              myUsername: eb.mySide?.name || 'unknown',
-              mySideId,
-              opponent: eb.farSide?.name || 'unknown',
-            },
-          );
-          persistPostMortem(pm);
+          persistBattleSnapshot(roomId, eb, {
+            final: true,
+            winner: eb.winner || undefined,
+            reason: 'battle-ended',
+          });
           dumpedBattleIds.add(roomId);
-          console.log(`[sc:postmortem] dumped ${pm.turns.length} turns for ${roomId}`);
+          console.log(`[sc:postmortem] dumped final battle for ${roomId}`);
         } catch (e) {
           console.error('[sc:postmortem] parse/dump failed', e);
         }
@@ -1643,6 +1844,7 @@ export default defineContentScript({
         if (myTeam.length && oppTeam.length >= 1) {
           const mySnaps = myTeam.map((p: any) => buildMyPokemon(p, null, win));
           const oppSnaps = oppTeam.map((p: any) => buildOppPokemon(p, win));
+          requestMatchupPlan(b, br, mySnaps, oppSnaps);
 
           fetchBeliefSnapshot(PROXY_BASE_URL, br?.id || '').then((snap: any) => {
             if (snap) lastBeliefSnapshot = snap;
@@ -1772,8 +1974,10 @@ export default defineContentScript({
           `${record.state.my.activeHpPct}% vs ${record.state.oppActive} ${record.state.opp.activeHpPct}% ` +
           `| weather=${record.state.weather} | hazards my=${hazMy} opp=${hazOpp}`
         );
+        requestMatchupPlanFromBattle(b, br);
         console.log('[sc] firing analysis', { turn: t, rqid, forceSwitch: !!req?.forceSwitch });
         requestAnalysis(payload, record);
+        persistBattleSnapshot(br.id, b, { final: false, reason: 'decision-recorded' });
         lastKey = key;
         // Refresh damage matrix + threats on every decision: the new
         // threats panel always reads `lastThreats` and the TCG card

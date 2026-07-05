@@ -1,0 +1,212 @@
+{
+  "note": "Synthetic fixture for parser KO-credit attribution. It mirrors captured stepQueue/scHistory fixture shape and exercises direct, hazard, status, delayed-move, and pressure KO credit.",
+  "meta": {
+    "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+    "format": "[Gen 9] National Dex",
+    "myUsername": "Me",
+    "mySideId": "p2",
+    "opponent": "Opp",
+    "ended": true,
+    "winner": "Me",
+    "capturedAtMs": 1776799000000
+  },
+  "counts": {
+    "stepQueueLen": 63,
+    "scHistoryLen": 6,
+    "turns": 9,
+    "sourceKoCount": 2
+  },
+  "stepQueue": [
+    "|gametype|singles",
+    "|player|p1|Opp|1|",
+    "|player|p2|Me|2|",
+    "|gen|9",
+    "|tier|[Gen 9] National Dex",
+    "|clearpoke",
+    "|poke|p1|Charizard, M|",
+    "|poke|p1|Corviknight, M|",
+    "|poke|p1|Blissey, F|",
+    "|poke|p1|Salamence, M|",
+    "|poke|p2|Landorus-Therian, M|",
+    "|poke|p2|Volcarona, F|",
+    "|poke|p2|Toxapex, F|",
+    "|poke|p2|Slowking-Galar, F|",
+    "|poke|p2|Iron Valiant|",
+    "|teampreview",
+    "|teamsize|p1|4",
+    "|teamsize|p2|5",
+    "|start",
+    "|switch|p1a: Charizard|Charizard, M|100/100",
+    "|switch|p2a: Landorus|Landorus-Therian, M|100/100",
+    "|turn|1",
+    "|move|p2a: Landorus|Stealth Rock|p1a: Charizard",
+    "|-sidestart|p1: Opp|move: Stealth Rock",
+    "|move|p1a: Charizard|Flamethrower|p2a: Landorus",
+    "|-damage|p2a: Landorus|80/100",
+    "|turn|2",
+    "|switch|p2a: Volcarona|Volcarona, F|100/100",
+    "|move|p2a: Volcarona|Fiery Dance|p1a: Charizard",
+    "|-damage|p1a: Charizard|30/100",
+    "|switch|p1a: Corviknight|Corviknight, M|100/100",
+    "|turn|3",
+    "|switch|p1a: Charizard|Charizard, M|30/100",
+    "|-damage|p1a: Charizard|0 fnt|[from] Stealth Rock",
+    "|faint|p1a: Charizard",
+    "|switch|p1a: Blissey|Blissey, F|100/100",
+    "|switch|p2a: Toxapex|Toxapex, F|100/100",
+    "|turn|4",
+    "|move|p2a: Toxapex|Toxic|p1a: Blissey",
+    "|-status|p1a: Blissey|psn|[from] move: Toxic",
+    "|-damage|p1a: Blissey|88/100 psn|[from] psn",
+    "|turn|5",
+    "|-damage|p1a: Blissey|0 fnt|[from] psn",
+    "|faint|p1a: Blissey",
+    "|switch|p1a: Salamence|Salamence, M|100/100",
+    "|switch|p2a: Slowking|Slowking-Galar, F|100/100",
+    "|turn|6",
+    "|move|p2a: Slowking|Future Sight|p1a: Salamence",
+    "|-start|p2a: Slowking|move: Future Sight",
+    "|turn|7",
+    "|switch|p2a: Iron Valiant|Iron Valiant|100/100",
+    "|move|p2a: Iron Valiant|Moonblast|p1a: Salamence",
+    "|-damage|p1a: Salamence|40/100",
+    "|turn|8",
+    "|-end|p1a: Salamence|move: Future Sight",
+    "|-damage|p1a: Salamence|0 fnt",
+    "|faint|p1a: Salamence",
+    "|switch|p1a: Corviknight|Corviknight, M|100/100",
+    "|turn|9",
+    "|move|p2a: Iron Valiant|Thunderbolt|p1a: Corviknight",
+    "|-damage|p1a: Corviknight|0 fnt",
+    "|faint|p1a: Corviknight",
+    "|win|Me"
+  ],
+  "scHistoryForBattle": [
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 1,
+      "rqid": 1,
+      "tStartMs": 1776799001000,
+      "tEndMs": 1776799001500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Landorus-Therian",
+        "oppActive": "Charizard"
+      },
+      "final": {
+        "bestMove": "Stealth Rock",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    },
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 2,
+      "rqid": 2,
+      "tStartMs": 1776799002000,
+      "tEndMs": 1776799002500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Volcarona",
+        "oppActive": "Charizard"
+      },
+      "final": {
+        "bestMove": "Fiery Dance",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    },
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 4,
+      "rqid": 4,
+      "tStartMs": 1776799004000,
+      "tEndMs": 1776799004500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Toxapex",
+        "oppActive": "Blissey"
+      },
+      "final": {
+        "bestMove": "Toxic",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    },
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 6,
+      "rqid": 6,
+      "tStartMs": 1776799006000,
+      "tEndMs": 1776799006500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Slowking-Galar",
+        "oppActive": "Salamence"
+      },
+      "final": {
+        "bestMove": "Future Sight",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    },
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 7,
+      "rqid": 7,
+      "tStartMs": 1776799007000,
+      "tEndMs": 1776799007500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Iron Valiant",
+        "oppActive": "Salamence"
+      },
+      "final": {
+        "bestMove": "Moonblast",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    },
+    {
+      "battleId": "battle-gen9nationaldex-ko-credit-fixture",
+      "turn": 9,
+      "rqid": 9,
+      "tStartMs": 1776799009000,
+      "tEndMs": 1776799009500,
+      "forceSwitch": false,
+      "state": {
+        "myActive": "Iron Valiant",
+        "oppActive": "Corviknight"
+      },
+      "final": {
+        "bestMove": "Thunderbolt",
+        "confidence": 0.8,
+        "sims": 100,
+        "depth": 5,
+        "pv": [],
+        "alternatives": [],
+        "event": "final"
+      }
+    }
+  ]
+}

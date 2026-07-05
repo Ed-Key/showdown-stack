@@ -32,7 +32,7 @@ export function renderPvChain(p: PvChainProps): HTMLElement {
   el.innerHTML = `
     <div class="pv-inner">
       <div class="pv-header">
-        <span class="pv-label">🔮 ENGINE LINE (PV)</span>
+        <span class="pv-label">ENGINE LINE (PV)</span>
         <span class="pv-meta">depth ${p.depth} · ${formatSims(p.sims)} sims</span>
       </div>
       <div class="pv-chain">${stepsHtml}</div>
