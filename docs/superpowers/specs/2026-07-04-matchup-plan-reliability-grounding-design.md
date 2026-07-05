@@ -121,7 +121,29 @@ class PreviewGrounding(BaseModel):
 5. Prompt payload includes damage summary, likely sets, and speed context when available.
 6. All new/updated vitest + pytest suites pass.
 
-### 9. Out of scope / recorded follow-ups
+### 9. Build stages and human-in-the-loop verification
+
+Build proceeds in six independently verifiable stages. Each stage ships with its automated tests **and** a hands-on check the user runs before the next stage starts.
+
+**Verification tooling added by this work (small, permanent):**
+
+- `SHOWDOWN_PREVIEW_LOG_PROMPT=1` — proxy logs the fully assembled prompt payload for `/preview-plan`, so the exact model input is inspectable.
+- `scripts/evaluate-preview-plans.py` gains `--battle <postmortem-file>` (replay one real saved preview offline) and `--grounding on|off` (A/B the grounding pack on the same input), printing plan + `sanitizedClaims`.
+- localStorage override `showdownCopilot.previewPlanRunMode` (`auto`|`fake`|`real`), read beside the existing preset override — forces the fallback path on demand for zero-cost UI testing and demos.
+- `__scPreviewGrounding()` console helper (same pattern as `__scDebug`) — prints the compact grounding pack for the current battle.
+
+| Stage | Ships | Automated | User check |
+|---|---|---|---|
+| 1 | Persistent card + `plan-lifecycle.ts` extraction | plan-lifecycle tests | Live battle: card appears at preview and is still there at turn 3+; console filter `sc:preview-plan` shows `response` and never `skipped stale render`; collapse toggle survives |
+| 2 | Cache/retry policy + fallback chip UI | client retry tests, card render tests | Kill the proxy at preview → "retrying" state; restart → model plan by next decision. Unset `ANTHROPIC_API_KEY` → amber heuristic chip, exactly one request in console |
+| 3 | De-personalized fallback | fallback pytest | Set `previewPlanRunMode='fake'` in console → heuristic plan references only the actual team; toggle back → model plan returns |
+| 4 | Extension grounding builder + `__scPreviewGrounding()` | preview-grounding tests | Run `__scPreviewGrounding()` at preview; spot-check its OHKO cells against the damage-matrix panel |
+| 5 | Proxy enrichment + prompt logging + replay flags | preview-grounding pytest | `SHOWDOWN_PREVIEW_LOG_PROMPT=1`, replay one saved battle with `--grounding on` vs `off`; read both plans side by side — grounded one must cite supplied numbers |
+| 6 | Sanitize-first flow + `sanitizedClaims` UI line | sanitize pytest | Replay several saved previews; confirm plans ship with dropped claims listed instead of collapsing to fallback; live card shows "N claims removed" when it happens |
+
+Final acceptance = the criteria in section 8 run as one ~15-minute live-battle checklist session.
+
+### 10. Out of scope / recorded follow-ups
 
 - Eval harness: extend `scripts/evaluate-preview-plans.py` with ~30 real-preview fixtures from the postmortem archive, rubric + LLM-judge scoring across model × grounding variants.
 - Mid-battle plan revision on revealed info ("Deep Battle Coach" tier).
