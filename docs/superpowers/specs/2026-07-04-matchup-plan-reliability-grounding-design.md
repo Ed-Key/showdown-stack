@@ -143,9 +143,18 @@ Build proceeds in six independently verifiable stages. Each stage ships with its
 
 Final acceptance = the criteria in section 8 run as one ~15-minute live-battle checklist session.
 
+### 9b. Field findings (2026-07-05, during Stage 1 gate prep)
+
+Live diagnosis before the first gate sharpened the problem statement:
+
+1. **`SHOWDOWN_PREVIEW_USE_THINKING=1` in the proxy env was the delivery killer.** With the `anthropic-sonnet-46-high` preset (adaptive thinking, effort high, display omitted), thinking consumed the entire `max_tokens` budget on every preview call → no text block → "model did not return JSON" → fallback after 215–240s. Confirmed across all logged real games; a direct probe with thinking off returned valid JSON in 15s (Haiku) / 155s (Sonnet 4.6, incl. repair round-trips). Flag is now commented out in `.env`; preview generation must never inherit dashboard-preset thinking config silently. Tasks 11/14 should drop the `SHOWDOWN_PREVIEW_USE_THINKING` branch entirely (delete, not keep off by default).
+2. **Verifier false positives confirmed in the wild.** With generation fixed, both models' plans were then rejected wholesale by `verify_preview_plan` on claims that are actually correct: ability-based immunities ("Ogerpon-Wellspring is immune to Water" — Water Absorb) and weather-boost multipliers ("2x in rain" read as a type-effectiveness claim). Sanitize-first (Tasks 13–14) converts these from plan-killers into dropped claims; making the verifier ability/weather-aware is a recorded follow-up below.
+3. **Latency reality check:** Haiku 4.5 end-to-end ≈ 66s including repair loops (15s for the raw model call); Sonnet 4.6 ≈ 155s. Acceptance criterion #1 ("model plan visible by turn 2–3") is realistic with Haiku-class presets + single-repair; marginal with Sonnet 4.6. Default preset choice is a user decision at the gate.
+
 ### 10. Out of scope / recorded follow-ups
 
 - Eval harness: extend `scripts/evaluate-preview-plans.py` with ~30 real-preview fixtures from the postmortem archive, rubric + LLM-judge scoring across model × grounding variants.
+- Verifier ability/weather awareness: teach `preview_verifier.py` about ability-based immunities (Water Absorb, Levitate, Flash Fire…) and weather/item damage modifiers so correct claims stop being flagged (see §9b).
 - Mid-battle plan revision on revealed info ("Deep Battle Coach" tier).
 - Server-side damage calculation (engine endpoint or node sidecar) making `/preview-plan` self-contained and eval-reusable.
 - Streaming plan output.
