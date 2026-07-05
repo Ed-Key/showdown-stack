@@ -160,7 +160,6 @@ def _fallback_plan(req: PreviewPlanRequest, reason: str | None = None) -> Previe
     start = time.perf_counter()
     opp_names = _display_map(req.opponentTeam)
     opp_norms = set(opp_names)
-    my_norms = {_norm(mon.species): mon for mon in req.myTeam}
 
     rain = bool(opp_norms & RAIN_SETTERS) and bool(opp_norms & RAIN_ABUSERS)
     sun = bool(opp_norms & {_norm(item) for item in SUN_SETTERS}) or bool(
@@ -196,65 +195,42 @@ def _fallback_plan(req: PreviewPlanRequest, reason: str | None = None) -> Previe
         summary = "Opponent preview has mixed offensive and defensive signals."
         win_path = "Scout the lead, avoid losing a key answer early, and convert engine edges into progress."
 
-    garchomp = my_norms.get("garchomp")
-    recommended = garchomp or (req.myTeam[0] if req.myTeam else PreviewPokemon(species="Unknown"))
+    def _pick_lead(mon_summaries: list[dict[str, Any]] | None = None) -> PreviewPokemon:
+        if mon_summaries:
+            ranked = sorted(
+                mon_summaries,
+                key=lambda row: int(row.get("survives") or 0) + int(row.get("threatens") or 0),
+                reverse=True,
+            )
+            best = _first_my_species(req, str(ranked[0].get("species") or ""))
+            if best:
+                return best
+        return req.myTeam[0] if req.myTeam else PreviewPokemon(species="Unknown")
+
+    mon_summaries = None  # Task 11 threads req.grounding.monSummaries through here.
+    recommended = _pick_lead(mon_summaries)
     recommended_lead = LeadOption(
         pokemon=recommended.species,
-        rating="safe",
-        reason=(
-            "Stable information lead with hazard/contact-chip utility."
-            if _norm(recommended.species) == "garchomp"
-            else "Default lead because no stronger preview-specific lead was identified."
-        ),
+        rating="situational",
+        reason="Heuristic pick: no model plan available; chosen from preview matchup counts."
+        if mon_summaries
+        else "Heuristic pick: no model plan available; first team slot by default.",
     )
 
     backup_leads: list[LeadOption] = []
-    for species in ("Iron Valiant", "Ogerpon-Wellspring", "Gholdengo", "Terapagos"):
-        mon = _first_my_species(req, species)
-        if mon and _norm(mon.species) != _norm(recommended_lead.pokemon):
-            backup_leads.append(LeadOption(
-                pokemon=mon.species,
-                rating="situational",
-                reason="Use when the matchup calls for immediate pressure instead of default hazard tempo.",
-            ))
-            if len(backup_leads) >= 2:
-                break
-
     avoid_leads: list[LeadOption] = []
-    volcarona = _first_my_species(req, "Volcarona")
-    if volcarona:
-        avoid_leads.append(LeadOption(
-            pokemon=volcarona.species,
-            rating="avoid",
-            reason="Usually too valuable to expose before hazards, weather, and immediate checks are known.",
-        ))
-
     lead_rules: list[LeadRule] = []
-    if garchomp and "gliscor" in opp_norms:
-        avoid = _moves_matching(garchomp, ["Stealth Rock", "Toxic"])
-        prefer = _moves_matching(garchomp, ["Dragon Tail", "Earthquake", "Stone Edge", "Rock Tomb"])
-        lead_rules.append(LeadRule(
-            ifOpponentLead=opp_names.get("gliscor", "Gliscor"),
-            avoid=avoid or ["Stealth Rock"],
-            prefer=prefer or ["attack or pivot"],
-            reason="Gliscor can deny passive openings with Taunt and often ignores Toxic via Poison Heal.",
-        ))
 
     preserve_targets: list[PreserveTarget] = []
-    ogerpon = _first_my_species(req, "Ogerpon-Wellspring")
-    if rain and ogerpon:
-        preserve_targets.append(PreserveTarget(
-            pokemon=ogerpon.species,
-            priority="high",
-            reason="Primary anti-rain and Water-pressure answer into Kingdra/Basculegion/Swampert structures.",
-        ))
-    gholdengo = _first_my_species(req, "Gholdengo")
-    if gholdengo and (opp_norms & HAZARD_OR_REMOVAL):
-        preserve_targets.append(PreserveTarget(
-            pokemon=gholdengo.species,
-            priority="medium",
-            reason="Can matter for hazard/removal games and punishing passive control pieces.",
-        ))
+    for row in (mon_summaries or [])[:6]:
+        if int(row.get("threatens") or 0) >= 2 and len(preserve_targets) < 2:
+            mon = _first_my_species(req, str(row.get("species") or ""))
+            if mon and _norm(mon.species) != _norm(recommended.species):
+                preserve_targets.append(PreserveTarget(
+                    pokemon=mon.species,
+                    priority="medium",
+                    reason="Threatens multiple preview opponents; avoid trading it away early.",
+                ))
 
     main_threats: list[ThreatItem] = []
     for norm_name in sorted(opp_norms & (RAIN_ABUSERS | SUN_ABUSERS | SETUP_THREATS)):
@@ -271,26 +247,19 @@ def _fallback_plan(req: PreviewPlanRequest, reason: str | None = None) -> Previe
         ))
 
     danger_rules: list[DangerRule] = []
-    if ogerpon and "alomomola" in opp_norms:
+    if rain:
         danger_rules.append(DangerRule(
-            id="ogerpon_alomomola_status_loop",
+            id="rain_preserve_water_answer",
             severity="high",
-            rule="Do not let Ogerpon-Wellspring spend slow setup turns in an Alomomola status/Wish/Protect loop.",
-            trigger={"myActive": ogerpon.species, "oppActive": opp_names.get("alomomola", "Alomomola")},
+            rule="Do not trade away your best answer to the rain attackers for early chip damage.",
+            trigger={"oppArchetype": "rain"},
         ))
-    if volcarona:
+    if stall_count >= 3:
         danger_rules.append(DangerRule(
-            id="volcarona_rocks_entry",
+            id="stall_no_passive_turns",
             severity="medium",
-            rule="Avoid bringing Volcarona into Stealth Rock unless it immediately wins or forces decisive progress.",
-            trigger={"myActive": volcarona.species, "field": "rocks_on_my_side"},
-        ))
-    if garchomp and "gliscor" in opp_norms:
-        danger_rules.append(DangerRule(
-            id="garchomp_gliscor_taunt",
-            severity="medium",
-            rule="Do not blindly click passive hazards into Gliscor before scouting Taunt pressure.",
-            trigger={"myActive": garchomp.species, "oppActive": opp_names.get("gliscor", "Gliscor")},
+            rule="Avoid giving free turns to recovery/status loops; make progress before they stabilize.",
+            trigger={"oppArchetype": "stall"},
         ))
 
     early_priorities = [
@@ -667,7 +636,13 @@ def preview_plan_quality_checks(plan: MatchupPlan, opponent_team: list[str]) -> 
     plan_text = json.dumps(plan.model_dump(), ensure_ascii=False).lower()
     if "pelipper" in opp_norms and opp_norms & RAIN_ABUSERS:
         add("rain_frame", "rain" in plan.archetype.lower() or "rain" in plan_text, "identify rain pressure")
-        add("rain_preserve", "ogerpon" in plan_text, "preserve or discuss Ogerpon as rain answer")
+        add(
+            "rain_preserve",
+            "preserve" in plan_text or bool(plan.preserveTargets) or any(
+                rule.id == "rain_preserve_water_answer" for rule in plan.dangerRules
+            ),
+            "flag preservation pressure against rain",
+        )
     if "torkoal" in opp_norms:
         add("sun_frame", "sun" in plan.archetype.lower() or "sun" in plan_text, "identify sun pressure")
     if len(opp_norms & STALL_CORE) >= 3:

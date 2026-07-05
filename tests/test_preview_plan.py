@@ -11,7 +11,6 @@ from showdown_copilot.preview_plan import (
     _preview_user_prompt,
     build_preview_plan,
     model_plan_mechanics_violations,
-    preview_plan_quality_checks,
 )
 from showdown_copilot.preview_verifier import verify_preview_plan
 
@@ -35,7 +34,7 @@ def default_team() -> list[PreviewPokemon]:
 
 
 @pytest.mark.asyncio
-async def test_fake_preview_plan_identifies_rain_and_preserve_target(monkeypatch):
+async def test_fake_preview_plan_identifies_rain(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     req = PreviewPlanRequest(
         battleId="battle-test-rain",
@@ -49,17 +48,14 @@ async def test_fake_preview_plan_identifies_rain_and_preserve_target(monkeypatch
 
     assert result.source == "fallback"
     assert result.plan.archetype == "rain offense"
-    assert any(target.pokemon == "Ogerpon-Wellspring" for target in result.plan.preserveTargets)
-    checks = preview_plan_quality_checks(result.plan, req.opponentTeam)
-    assert checks
-    assert all(check["passed"] for check in checks)
+    assert result.plan.recommendedLead.pokemon == "Garchomp"  # first team slot, not hardcoded
 
 
 @pytest.mark.asyncio
-async def test_fake_preview_plan_adds_gliscor_lead_rule(monkeypatch):
+async def test_fake_preview_plan_detects_stall_without_team_specific_rules(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     req = PreviewPlanRequest(
-        battleId="battle-test-gliscor",
+        battleId="battle-test-stall",
         format="gen9nationaldex",
         myTeam=default_team(),
         opponentTeam=["Gliscor", "Alomomola", "Claydol", "Heatran", "Garganacl", "Toxapex"],
@@ -69,10 +65,32 @@ async def test_fake_preview_plan_adds_gliscor_lead_rule(monkeypatch):
     result = await build_preview_plan(req)
 
     assert result.plan.archetype == "bulky stall/control"
-    gliscor_rule = next(rule for rule in result.plan.leadRules if rule.ifOpponentLead == "Gliscor")
-    assert "Stealth Rock" in gliscor_rule.avoid
-    assert {"Earthquake", "Dragon Tail"} & set(gliscor_rule.prefer)
-    assert any(rule.trigger.get("oppActive") == "Alomomola" for rule in result.plan.dangerRules)
+    # No fabricated per-species rules: everything mentioned must exist in the request.
+    plan_text = json.dumps(result.plan.model_dump()).lower()
+    for absent in ("ogerpon", "volcarona", "gholdengo"):
+        assert absent not in plan_text
+
+
+@pytest.mark.asyncio
+async def test_fallback_plan_only_references_request_species(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    req = PreviewPlanRequest(
+        battleId="battle-test-generic",
+        format="gen9nationaldex",
+        myTeam=[
+            PreviewPokemon(species="Skarmory", moves=["Spikes", "Roost"]),
+            PreviewPokemon(species="Blissey", moves=["Seismic Toss", "Soft-Boiled"]),
+        ],
+        opponentTeam=["Pelipper", "Kingdra", "Ferrothorn"],
+        runMode="fake",
+    )
+
+    result = await build_preview_plan(req)
+
+    plan_text = json.dumps(result.plan.model_dump()).lower()
+    for absent in ("garchomp", "ogerpon", "volcarona", "gholdengo", "iron valiant", "terapagos"):
+        assert absent not in plan_text
+    assert result.plan.recommendedLead.pokemon == "Skarmory"
 
 
 @pytest.mark.asyncio
