@@ -19,6 +19,9 @@ class EngineUpdate:
     depth: int
     pv: list[str] = field(default_factory=list)
     alternatives: list[dict[str, Any]] = field(default_factory=list)
+    message: str | None = None
+    pimc_breakdown: list[dict[str, Any]] = field(default_factory=list)
+    pimc_consensus: dict[str, Any] | None = None
     is_final: bool = False
     error: str | None = None
 
@@ -34,6 +37,13 @@ class EngineUpdate:
             depth=int(obj.get("depth", 0)),
             pv=list(obj.get("pv", [])),
             alternatives=list(obj.get("alternatives", [])),
+            message=obj.get("message") if isinstance(obj.get("message"), str) else None,
+            pimc_breakdown=list(obj.get("pimcBreakdown", []))
+            if isinstance(obj.get("pimcBreakdown"), list)
+            else [],
+            pimc_consensus=obj.get("pimcConsensus")
+            if isinstance(obj.get("pimcConsensus"), dict)
+            else None,
             is_final=(event in ("final", "error")),
             error=obj.get("message") if event == "error" else None,
         )

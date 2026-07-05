@@ -33,9 +33,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from showdown_copilot.belief import BeliefTracker, _BASE_SPEEDS, _normalize
+from showdown_copilot.dashboard import router as dashboard_router
 from showdown_copilot.explainer import ExplainRequest, SYSTEM_PROMPT, build_explain_prompt
 from showdown_copilot.llm import LLMClient, build_default_llm
 from showdown_copilot.models import Distributions
+from showdown_copilot.preview_plan import PreviewPlanRequest, build_preview_plan
 from showdown_copilot.priors import PriorsSource
 from showdown_copilot.stats import _NATURE_TO_SPE_MULT, compute_speed_stat
 
@@ -768,6 +770,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(dashboard_router)
 
 
 # --- engine-replay logging ---
@@ -907,6 +910,33 @@ async def healthz() -> JSONResponse:
             "engine_url": ENGINE_URL,
         }
     )
+
+
+@app.post("/preview-plan")
+async def preview_plan(req: PreviewPlanRequest) -> JSONResponse:
+    """Create the structured live matchup plan shown at team preview."""
+    started = time.perf_counter()
+    logger.info(
+        "/preview-plan: start battle=%s fmt=%s mode=%s preset=%s my=%s opp=%s",
+        req.battleId,
+        req.format,
+        req.runMode,
+        req.presetId,
+        [mon.species for mon in req.myTeam],
+        req.opponentTeam,
+    )
+    response = await build_preview_plan(req)
+    logger.info(
+        "/preview-plan: done battle=%s source=%s provider=%s model=%s latency_ms=%s route_ms=%s fallback=%s",
+        response.battleId,
+        response.source,
+        response.provider,
+        response.model,
+        response.latencyMs,
+        int((time.perf_counter() - started) * 1000),
+        response.fallbackReason,
+    )
+    return JSONResponse(response.model_dump())
 
 
 def _serialize_distributions(d: Distributions) -> dict:
@@ -1077,6 +1107,130 @@ def _build_postmortem_filename(pm: dict) -> str:
     return f"{date_part}-{opp}-{fmt}-{suffix}.json"
 
 
+def _load_replay_finals_by_turn(battle_id: str) -> dict[int, dict[str, Any]]:
+    """Return latest terminal engine final per turn for a battle.
+
+    The browser can abort an old response stream when a newer decision point
+    arrives, leaving scHistory with a decision row but no final. The proxy's
+    engine-replay archive still has the completed terminal event, so disk
+    postmortems can be repaired for analytics without changing live UI flow.
+    """
+    replay_path = _REPLAY_DIR / f"{battle_id}.jsonl"
+    if not replay_path.exists():
+        return {}
+
+    finals: dict[int, dict[str, Any]] = {}
+    try:
+        with replay_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                turn = row.get("turn")
+                terminal = row.get("engine_response_terminal")
+                if not isinstance(turn, int):
+                    continue
+                if not isinstance(terminal, dict) or not terminal.get("bestMove"):
+                    continue
+                finals[turn] = terminal
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("/postmortem: could not read replay finals for %s: %s", battle_id, exc)
+        return {}
+    return finals
+
+
+def _enrich_missing_postmortem_picks_from_replay(pm: dict) -> int:
+    """Fill missing regular-row recommendations from engine replay JSONL.
+
+    This targets rows like: actual switch captured, but myPick.name is null
+    because the client-side fetch stream was aborted before scHistory got the
+    final event. We only patch regular rows and only when the pick is absent.
+    """
+    battle_id = pm.get("battleId")
+    turns = pm.get("turns")
+    if not isinstance(battle_id, str) or not battle_id or not isinstance(turns, list):
+        return 0
+
+    finals_by_turn = _load_replay_finals_by_turn(battle_id)
+    if not finals_by_turn:
+        return 0
+
+    patched = 0
+    for turn_row in turns:
+        if not isinstance(turn_row, dict) or turn_row.get("forceSwitch"):
+            continue
+        my_pick = turn_row.get("myPick")
+        if not isinstance(my_pick, dict) or my_pick.get("name"):
+            continue
+        turn = turn_row.get("turn")
+        if not isinstance(turn, int):
+            continue
+        final = finals_by_turn.get(turn)
+        if not final:
+            continue
+        my_pick["name"] = final.get("bestMove")
+        my_pick["confidence"] = final.get("confidence")
+        my_pick["sims"] = final.get("sims")
+        my_pick["depth"] = final.get("depth")
+        my_pick["pv"] = final.get("pv") if isinstance(final.get("pv"), list) else []
+        my_pick["message"] = final.get("message")
+        my_pick["pimcConsensus"] = final.get("pimcConsensus") if isinstance(final.get("pimcConsensus"), dict) else None
+        my_pick["pimcBreakdown"] = final.get("pimcBreakdown") if isinstance(final.get("pimcBreakdown"), list) else []
+        patched += 1
+    return patched
+
+
+def _normalize_postmortem_token(value: Any) -> str:
+    return "".join(c for c in str(value or "").lower() if c.isalnum())
+
+
+def _reclassify_postmortem_pick_kinds(pm: dict) -> int:
+    """Classify regular recommendations as moves or switches from team preview.
+
+    Older browser builds wrote species-name recommendations like "GARCHOMP" as
+    ``kind: "move"`` because the engine response only has a bestMove string.
+    The postmortem already stores our team preview, so repair the serialized
+    analytics shape here instead of requiring a browser-side reparse.
+    """
+    team_preview = pm.get("teamPreview")
+    turns = pm.get("turns")
+    if not isinstance(team_preview, dict) or not isinstance(turns, list):
+        return 0
+
+    mine = team_preview.get("mine")
+    if not isinstance(mine, list):
+        return 0
+
+    my_species = {
+        normalized
+        for species in mine
+        if (normalized := _normalize_postmortem_token(species))
+    }
+    if not my_species:
+        return 0
+
+    patched = 0
+    for turn_row in turns:
+        if not isinstance(turn_row, dict) or turn_row.get("forceSwitch"):
+            continue
+        my_pick = turn_row.get("myPick")
+        if not isinstance(my_pick, dict):
+            continue
+        name = my_pick.get("name")
+        if not name:
+            continue
+        desired_kind = (
+            "switch" if _normalize_postmortem_token(name) in my_species else "move"
+        )
+        if my_pick.get("kind") != desired_kind:
+            my_pick["kind"] = desired_kind
+            patched += 1
+    return patched
+
+
 @app.post("/postmortem")
 async def postmortem(req: Request) -> JSONResponse:
     """Accept and persist a battle postmortem JSON. The extension fires this
@@ -1118,17 +1272,80 @@ async def postmortem(req: Request) -> JSONResponse:
 
     fname = existing_fname or _build_postmortem_filename(body)
     out = _POSTMORTEM_DIR / fname
+    enriched_missing_picks = _enrich_missing_postmortem_picks_from_replay(body)
+    if enriched_missing_picks:
+        logger.info(
+            "/postmortem: enriched %d missing pick(s) from engine replay for %s",
+            enriched_missing_picks,
+            battle_id,
+        )
+    reclassified_pick_kinds = _reclassify_postmortem_pick_kinds(body)
+    if reclassified_pick_kinds:
+        logger.info(
+            "/postmortem: reclassified %d regular pick kind(s) for %s",
+            reclassified_pick_kinds,
+            battle_id,
+        )
 
     # Race-condition guard (2026-05-08): soft-persist fires per turn as
     # fetch() promises. Network jitter can make an EARLIER persist's POST
     # land at the proxy AFTER a later persist's POST, overwriting more
     # complete data with less complete data. Skip overwrite if the
     # incoming pm has STRICTLY FEWER turn diffs than what's on disk.
+    #
+    # Exception: a final battle-end post can legitimately have fewer decision
+    # rows if Showdown ends before another engine request is recorded. In that
+    # case, preserve the richer existing turns and merge final metadata like
+    # winner/endedAtMs/totalTurns onto the existing file.
     if existing_fname and out.exists():
         try:
             existing_pm = json.loads(out.read_text(encoding="utf-8"))
             existing_turns = len(existing_pm.get("turns") or [])
             new_turns = len(body.get("turns") or [])
+            if new_turns < existing_turns:
+                ended_ms = body.get("endedAtMs")
+                new_is_final = bool(body.get("winner")) or (
+                    isinstance(ended_ms, (int, float)) and ended_ms > 0
+                )
+                if new_is_final:
+                    merged = dict(existing_pm)
+                    for key in (
+                        "winner",
+                        "endedAtMs",
+                        "totalTurns",
+                        "battleNote",
+                        "replayUrl",
+                        "schemaVersion",
+                    ):
+                        if body.get(key) is not None:
+                            merged[key] = body.get(key)
+                    if isinstance(existing_pm.get("totalTurns"), int) and isinstance(body.get("totalTurns"), int):
+                        merged["totalTurns"] = max(existing_pm["totalTurns"], body["totalTurns"])
+                    body = merged
+                    enriched_missing_picks = _enrich_missing_postmortem_picks_from_replay(body)
+                    if enriched_missing_picks:
+                        logger.info(
+                            "/postmortem: enriched %d missing pick(s) after final merge for %s",
+                            enriched_missing_picks,
+                            battle_id,
+                        )
+                    reclassified_pick_kinds = _reclassify_postmortem_pick_kinds(body)
+                    if reclassified_pick_kinds:
+                        logger.info(
+                            "/postmortem: reclassified %d regular pick kind(s) after final merge for %s",
+                            reclassified_pick_kinds,
+                            battle_id,
+                        )
+                    new_turns = existing_turns
+                else:
+                    logger.info(
+                        "/postmortem: skipping overwrite for %s — new pm has %d turn diffs, existing has %d",
+                        battle_id, new_turns, existing_turns,
+                    )
+                    return JSONResponse({
+                        "ok": True, "file": fname, "overwrote": False,
+                        "skipped_stale": True, "existing_turns": existing_turns, "new_turns": new_turns,
+                    })
             if new_turns < existing_turns:
                 logger.info(
                     "/postmortem: skipping overwrite for %s — new pm has %d turn diffs, existing has %d",
