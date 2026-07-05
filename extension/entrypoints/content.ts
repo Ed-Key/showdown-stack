@@ -76,6 +76,16 @@ export default defineContentScript({
       }
     }
 
+    const PREVIEW_PLAN_RUNMODE_STORAGE_KEY = 'showdownCopilot.previewPlanRunMode';
+
+    function configuredPreviewPlanRunMode(): 'auto' | 'fake' | 'real' {
+      try {
+        const stored = (localStorage.getItem(PREVIEW_PLAN_RUNMODE_STORAGE_KEY) || '').trim();
+        if (stored === 'fake' || stored === 'real' || stored === 'auto') return stored;
+      } catch { /* localStorage unavailable */ }
+      return 'auto';
+    }
+
     // ---- UI -------------------------------------------------------------
     const panel = document.createElement('div');
     panel.id = 'sc-panel';
@@ -386,7 +396,7 @@ export default defineContentScript({
         opponentTeam: oppSnaps.map((p: any) => String(p?.species ?? '')).filter(Boolean),
         teamStats: { source: 'live-team-preview' },
         presetId: configuredPreviewPlanPresetId(),
-        runMode: 'auto',
+        runMode: configuredPreviewPlanRunMode(),
       }).then((response) => {
         if (response) {
           console.log('[sc:preview-plan] response', {
