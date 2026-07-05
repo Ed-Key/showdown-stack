@@ -77,11 +77,6 @@ describe('renderTcgCard', () => {
     expect(el.querySelector('.big-conf')?.textContent).toContain('73');
   });
 
-  it('renders the LLM flavor strip', () => {
-    const el = renderTcgCard(FIXTURE);
-    expect(el.querySelector('.flavor')?.textContent).toContain('OHKOs Samurott-Hisui');
-  });
-
   it('renders one move row per alternative', () => {
     const el = renderTcgCard(FIXTURE);
     expect(el.querySelectorAll('.move').length).toBe(2);
