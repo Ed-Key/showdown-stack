@@ -19,7 +19,7 @@
 - localStorage keys (exact): `showdownCopilot.matchupPlanCollapsed`, `showdownCopilot.previewPlanRunMode` (existing: `showdownCopilot.previewPlanPresetId`).
 - Env vars introduced: `SHOWDOWN_PREVIEW_LOG_PROMPT=1` (log assembled prompt), `SHOWDOWN_PREVIEW_DISABLE_GROUNDING=1` (skip proxy-side grounding enrichment; used by the evaluator's `--grounding off`).
 - Commit after every task with the message given in its final step.
-- Stage gates: after Tasks 3, 5, 6, 8, 12, and 15, STOP and have the user run the corresponding manual check from spec section 9 before continuing.
+- Stage gates: after Tasks 3, 4, 6, 8, 12, and 15, STOP and have the user run the corresponding manual check from spec section 9 before continuing.
 
 ---
 
