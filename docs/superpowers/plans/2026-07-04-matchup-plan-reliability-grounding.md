@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Repo root: `/Users/edkiboma/Projects/pokemon-ai/showdown-stack`. Python commands run from repo root via `uv run …`; extension commands run from `extension/` via `npx vitest run …` (never bare `vitest`, which watches).
-- **Pre-existing failure:** `extension/test/panels/tcg-card.test.ts > renders the LLM flavor strip` fails on `main` (asserts a removed `.flavor` element). Do NOT fix or delete it in this plan. Every "full vitest suite" expectation below means: all tests pass **except** this one known failure.
+- Both suites are fully green at the starting commit (`de374cf`): pytest 400 passed / 8 skipped, vitest 282/282. Every "full vitest suite" expectation below means: **all tests pass** (the formerly failing flavor-strip test was deleted before execution began).
 - Never modify `engine/`, `engine-doubles/`, `sidecar/` (separate repos, gitignored).
 - Constants (from spec, exact values): retry budget `MAX_PLAN_ATTEMPTS = 3` (1 initial + 2 retries), `PLAN_RETRY_SPACING_MS = 15_000`; grounding cell cap **24**, notable-damage floor **50%**; usage floors: moves/items/abilities/tera **20%**, scarf-plausible **15%**; preview output-token clamp **2500**; `SHOWDOWN_PREVIEW_REPAIR_ATTEMPTS` default changes **2 → 1** and applies to core issues only.
 - localStorage keys (exact): `showdownCopilot.matchupPlanCollapsed`, `showdownCopilot.previewPlanRunMode` (existing: `showdownCopilot.previewPlanPresetId`).
