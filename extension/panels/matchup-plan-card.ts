@@ -14,13 +14,16 @@ export function renderMatchupPlanCard(response: PreviewPlanResponse): HTMLElemen
   const threats = (plan.mainThreats ?? []).map((item) => item.pokemon);
   const rules = (plan.dangerRules ?? []).slice(0, 3);
   const leadRules = (plan.leadRules ?? []).slice(0, 2);
+  const sourceHtml = response.source === 'model'
+    ? `<span class="sc-plan-chip model">${escapeHtml(response.model || response.provider)} · ${escapeHtml(plan.confidence)}</span>`
+    : `<span class="sc-plan-chip heuristic" title="${escapeHtml(response.fallbackReason || 'model unavailable')}">heuristic · model unavailable</span>`;
   el.innerHTML = `
     <div class="sc-plan-topline">
       <div>
         <div class="sc-plan-kicker">Matchup Plan</div>
         <div class="sc-plan-title">${escapeHtml(plan.archetype)}</div>
       </div>
-      <div class="sc-plan-source">${escapeHtml(response.source)} · ${escapeHtml(plan.confidence)}</div>
+      <div class="sc-plan-source">${sourceHtml}</div>
     </div>
     <div class="sc-plan-summary">${escapeHtml(plan.summary)}</div>
     <div class="sc-plan-win"><strong>Win path</strong> ${escapeHtml(plan.winPath)}</div>

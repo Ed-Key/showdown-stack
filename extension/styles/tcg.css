@@ -706,6 +706,8 @@
   color: rgba(255,255,255,0.45);
   border-color: rgba(255,255,255,0.14);
 }
+.sc-plan-chip.model { background: #0c2b1c; color: #7ae8b0; border: 1px solid #16543a; }
+.sc-plan-chip.heuristic { background: #4a3000; color: #ffd97a; border: 1px solid #8a5c00; }
 .sc-plan-danger {
   border-top: 1px solid rgba(255,255,255,0.1);
   padding-top: 8px;
