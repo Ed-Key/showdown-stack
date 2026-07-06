@@ -145,10 +145,6 @@ RAIN_ABUSERS = {"kingdra", "basculegion", "swampert", "barraskewda", "dracovish"
 SUN_SETTERS = {"torkoal", "ninetales", "charizard-y", "charizardmega-y"}
 SUN_ABUSERS = {"venusaur", "charizard", "walkingwake", "roaringmoon", "slitherwing"}
 SAND_SETTERS = {"tyranitar", "hippowdon"}
-HAZARD_OR_REMOVAL = {
-    "gliscor", "corviknight", "excadrill", "greattusk", "skarmory", "claydol",
-    "tinglu", "ferrothorn", "clodsire", "landorustherian", "samurotthisui",
-}
 STATUS_SUPPORT = {"alomomola", "gliscor", "toxapex", "blissey", "clefable", "sableye", "salazzle"}
 STALL_CORE = {"alomomola", "gliscor", "toxapex", "blissey", "slowbro", "claydol", "skarmory", "corviknight", "clefable"}
 SETUP_THREATS = {
@@ -163,16 +159,6 @@ def _norm(value: Any) -> str:
 
 def _display_map(values: list[str]) -> dict[str, str]:
     return {_norm(value): value for value in values if value}
-
-
-def _has_move(mon: PreviewPokemon, move_name: str) -> bool:
-    wanted = _norm(move_name)
-    return any(_norm(move) == wanted for move in mon.moves)
-
-
-def _moves_matching(mon: PreviewPokemon, names: list[str]) -> list[str]:
-    wanted = {_norm(name) for name in names}
-    return [move for move in mon.moves if _norm(move) in wanted]
 
 
 def _first_my_species(req: PreviewPlanRequest, species: str) -> PreviewPokemon | None:
