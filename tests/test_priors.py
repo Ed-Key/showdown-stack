@@ -437,3 +437,34 @@ def test_get_distributions_filters_by_belief_and_returns_full_dists(mini_chaos_n
     assert dists.moves["earthquake"] > 0
     # tera not belief-filtered
     assert len(dists.tera_types) > 0
+
+
+def test_usage_summary_formats_and_filters(monkeypatch):
+    from showdown_copilot.priors import PriorsSource
+
+    entry = {
+        "Moves": {"toxic": 780, "protect": 710, "earthquake": 400, "spikes": 90, "uturn": 20},
+        "Items": {"toxicorb": 940, "choicescarf": 60},
+        "Abilities": {"poisonheal": 970, "hypercutter": 30},
+        "Tera Types": {"Water": 500, "Normal": 300, "Ghost": 100},
+    }
+    source = PriorsSource.__new__(PriorsSource)  # skip __init__ (no network/cache)
+    monkeypatch.setattr(source, "_lookup_entry", lambda species, fmt, team_type=None: entry)
+
+    summary = source.usage_summary("Gliscor", "gen9nationaldex")
+
+    move_names = [row["name"] for row in summary["topMoves"]]
+    assert move_names[:2] == ["toxic", "protect"]
+    assert all(row["pct"] >= 20 for row in summary["topMoves"])
+    assert "spikes" not in move_names  # below the 20% floor
+    assert summary["topItems"][0]["name"] == "toxicorb"
+    assert summary["scarfPct"] == 6
+    assert summary["topAbilities"][0] == {"name": "poisonheal", "pct": 97}
+
+
+def test_usage_summary_returns_none_for_unknown_species(monkeypatch):
+    from showdown_copilot.priors import PriorsSource
+
+    source = PriorsSource.__new__(PriorsSource)
+    monkeypatch.setattr(source, "_lookup_entry", lambda species, fmt, team_type=None: None)
+    assert source.usage_summary("Missingno", "gen9nationaldex") is None

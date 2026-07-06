@@ -209,6 +209,40 @@ class PriorsSource:
             entry = data.get(species)
         return entry
 
+    def usage_summary(self, species: str, format: str) -> dict[str, Any] | None:
+        """Display-ready usage stats for the preview planner's grounding pack.
+
+        Returns None when the species has no chaos entry (or loading fails);
+        the caller omits that species rather than blocking plan generation.
+        """
+        try:
+            entry = self._lookup_entry(species, format)
+        except Exception:
+            return None
+        if entry is None:
+            return None
+
+        def top(dist: dict[str, float], n: int, floor_pct: int) -> list[dict[str, Any]]:
+            normalized = _normalize_dist(dict(dist or {}))
+            rows = sorted(normalized.items(), key=lambda kv: -kv[1])[:n]
+            return [
+                {"name": name, "pct": round(weight * 100)}
+                for name, weight in rows
+                if round(weight * 100) >= floor_pct
+            ]
+
+        items = _normalize_dist(dict(entry.get("Items", {}) or {}))
+        scarf_pct = round(sum(
+            weight for name, weight in items.items() if _normalize(name) == "choicescarf"
+        ) * 100)
+        return {
+            "topMoves": top(entry.get("Moves", {}), 4, 20),
+            "topItems": top(entry.get("Items", {}), 2, 20),
+            "topAbilities": top(entry.get("Abilities", {}), 2, 20),
+            "topTera": top(entry.get("Tera Types", {}), 2, 20),
+            "scarfPct": scarf_pct,
+        }
+
     def get_set(
         self,
         species: str,
