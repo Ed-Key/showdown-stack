@@ -20,7 +20,7 @@ from .llm_response import parse_jsonish_model_output, response_text, usage_from_
 from .mechanics_facts import build_preview_planner_fact_pack
 from .preview_grounding import build_opponent_likely_sets, build_speed_context
 from .preview_repair import merge_plan_and_repair_usage, repair_preview_plan_json
-from .preview_verifier import issue_messages, verify_preview_plan
+from .preview_verifier import issue_messages, sanitize_preview_plan, verify_preview_plan
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ class PreviewPlanResponse(BaseModel):
     plan: MatchupPlan
     rawText: str | None = None
     fallbackReason: str | None = None
+    sanitizedClaims: list[str] = Field(default_factory=list)
 
 
 RAIN_SETTERS = {"pelipper", "politoed"}
@@ -526,7 +527,7 @@ async def _openai_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any], 
             "instructions": PREVIEW_SYSTEM_PROMPT,
             "input": user_prompt,
             "reasoning": {"effort": preset.get("openaiReasoningEffort") or "medium"},
-            "max_output_tokens": int(preset.get("maxOutputTokens") or 1800),
+            "max_output_tokens": min(int(preset.get("maxOutputTokens") or 1800), 2500),
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -559,7 +560,7 @@ async def _anthropic_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any
         "model": model,
         "system": PREVIEW_SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": user_prompt}],
-        "max_tokens": int(preset.get("maxOutputTokens") or 2200),
+        "max_tokens": min(int(preset.get("maxOutputTokens") or 2200), 2500),
     }
     output_config = payload.get("output_config") if isinstance(payload.get("output_config"), dict) else {}
     payload["output_config"] = {
@@ -628,36 +629,40 @@ async def build_preview_plan(req: PreviewPlanRequest) -> PreviewPlanResponse:
         return _fallback_plan(req, reason=f"model preview failed: {exc}")
 
     my_species = [mon.species for mon in req.myTeam]
-    issues = verify_preview_plan(plan, req.opponentTeam, my_species)
-    repair_attempts = max(0, int(os.environ.get("SHOWDOWN_PREVIEW_REPAIR_ATTEMPTS", "2")))
-    for attempt_index in range(repair_attempts):
-        if not issues:
-            break
-        try:
-            repaired_json, repair_usage, repair_raw_text = await repair_preview_plan_json(
-                provider=provider,
-                preset=preset,
-                plan=plan.model_dump(),
-                issues=[issue.model_dump() for issue in issues],
-                schema=_matchup_plan_json_schema(),
-            )
-            repaired_plan = _coerce_plan(repaired_json)
-            repaired_issues = verify_preview_plan(repaired_plan, req.opponentTeam, my_species)
-            if not repaired_issues:
-                plan = repaired_plan
-                issues = []
-                usage = merge_plan_and_repair_usage(usage, repair_usage)
-                raw_text = f"{raw_text}\n\n[repair {attempt_index + 1}]\n{repair_raw_text or ''}".strip()
-                break
-            plan = repaired_plan
-            issues = repaired_issues
-            usage = merge_plan_and_repair_usage(usage, repair_usage)
-            raw_text = f"{raw_text}\n\n[repair {attempt_index + 1} incomplete]\n{repair_raw_text or ''}".strip()
-        except Exception as exc:  # noqa: BLE001 - keep live preview degradable.
-            return _fallback_plan(req, reason=f"model preview repair failed: {exc}")
+    sanitized_claims: list[str] = []
 
+    issues = verify_preview_plan(plan, req.opponentTeam, my_species)
     if issues:
-        return _fallback_plan(req, reason=f"model mechanics validation failed: {'; '.join(issue_messages(issues))}")
+        data, removed, core_issues = sanitize_preview_plan(plan, issues)
+        plan = _coerce_plan(data)
+        sanitized_claims.extend(removed)
+
+        repair_attempts = max(0, int(os.environ.get("SHOWDOWN_PREVIEW_REPAIR_ATTEMPTS", "1")))
+        if core_issues and repair_attempts > 0:
+            try:
+                repaired_json, repair_usage, repair_raw_text = await repair_preview_plan_json(
+                    provider=provider,
+                    preset=preset,
+                    plan=plan.model_dump(),
+                    issues=[issue.model_dump() for issue in core_issues],
+                    schema=_matchup_plan_json_schema(),
+                )
+                plan = _coerce_plan(repaired_json)
+                usage = merge_plan_and_repair_usage(usage, repair_usage)
+                raw_text = f"{raw_text}\n\n[repair]\n{repair_raw_text or ''}".strip()
+                data, removed, core_issues = sanitize_preview_plan(
+                    plan, verify_preview_plan(plan, req.opponentTeam, my_species),
+                )
+                plan = _coerce_plan(data)
+                sanitized_claims.extend(removed)
+            except Exception as exc:  # noqa: BLE001 - keep live preview degradable.
+                return _fallback_plan(req, reason=f"model preview repair failed: {exc}")
+
+        if core_issues:
+            return _fallback_plan(
+                req,
+                reason=f"core mechanics validation failed: {'; '.join(issue_messages(core_issues))}",
+            )
 
     return PreviewPlanResponse(
         battleId=req.battleId,
@@ -670,6 +675,7 @@ async def build_preview_plan(req: PreviewPlanRequest) -> PreviewPlanResponse:
         usage=usage,
         plan=plan,
         rawText=raw_text,
+        sanitizedClaims=sanitized_claims,
     )
 
 

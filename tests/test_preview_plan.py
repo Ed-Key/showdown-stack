@@ -538,3 +538,80 @@ async def test_anthropic_preview_plan_omits_thinking_even_when_env_enabled(monke
 
     assert "thinking" not in captured
     assert plan.recommendedLead.pokemon == "Garchomp"
+
+
+def _plan_with_bad_threat() -> MatchupPlan:
+    return MatchupPlan(
+        archetype="rain offense", confidence="medium",
+        summary="Rain team.", winPath="Preserve the Water answer.",
+        recommendedLead=LeadOption(pokemon="Skarmory", rating="safe", reason="Info lead."),
+        backupLeads=[], avoidLeads=[], leadRules=[], preserveTargets=[],
+        mainThreats=[
+            # Ferrothorn is Grass/Steel: claiming it "resists Fire" is false (4x weak).
+            preview_plan_module.ThreatItem(pokemon="Ferrothorn", reason="Ferrothorn resists Fire moves.", priority="high"),
+        ],
+        dangerRules=[], earlyPriorities=[], uncertainties=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_item_issue_sanitizes_without_repair_or_fallback(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    async def fake_model(req, preset, user_prompt):
+        return _plan_with_bad_threat(), {"inputTokens": 1}, "raw"
+
+    repair_calls = []
+
+    async def fake_repair(**kwargs):
+        repair_calls.append(kwargs)
+        raise AssertionError("repair must not be called for list-item issues")
+
+    monkeypatch.setattr(preview_plan_module, "_openai_preview_plan", fake_model)
+    monkeypatch.setattr(preview_plan_module, "repair_preview_plan_json", fake_repair)
+
+    req = PreviewPlanRequest(
+        battleId="b-sanitize", format="gen9nationaldex", myTeam=default_team(),
+        opponentTeam=["Ferrothorn", "Pelipper"], presetId="openai-gpt-54-mini-balanced",
+        runMode="real",
+    )
+    result = await build_preview_plan(req)
+
+    assert result.source == "model"
+    assert result.plan.mainThreats == []
+    assert result.sanitizedClaims and "Ferrothorn" in result.sanitizedClaims[0]
+    assert repair_calls == []
+
+
+@pytest.mark.asyncio
+async def test_core_issue_gets_one_repair_then_fallback(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("SHOWDOWN_PREVIEW_REPAIR_ATTEMPTS", "1")
+
+    bad_core = _plan_with_bad_threat().model_copy(update={
+        "mainThreats": [],
+        "winPath": "Win because Ferrothorn resists Fire moves.",
+    })
+
+    async def fake_model(req, preset, user_prompt):
+        return bad_core, {"inputTokens": 1}, "raw"
+
+    repair_calls = []
+
+    async def fake_repair(**kwargs):
+        repair_calls.append(kwargs)
+        return bad_core.model_dump(), {"inputTokens": 1}, "raw-repair"  # still bad
+
+    monkeypatch.setattr(preview_plan_module, "_openai_preview_plan", fake_model)
+    monkeypatch.setattr(preview_plan_module, "repair_preview_plan_json", fake_repair)
+
+    req = PreviewPlanRequest(
+        battleId="b-core", format="gen9nationaldex", myTeam=default_team(),
+        opponentTeam=["Ferrothorn", "Pelipper"], presetId="openai-gpt-54-mini-balanced",
+        runMode="real",
+    )
+    result = await build_preview_plan(req)
+
+    assert len(repair_calls) == 1
+    assert result.source == "fallback"
+    assert "core mechanics validation failed" in (result.fallbackReason or "")
