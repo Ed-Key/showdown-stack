@@ -120,7 +120,7 @@ class PreviewPlanRequest(BaseModel):
     myTeam: list[PreviewPokemon]
     opponentTeam: list[str]
     teamStats: dict[str, Any] = Field(default_factory=dict)
-    presetId: str = "anthropic-sonnet-46-high"
+    presetId: str = "anthropic-haiku-45-balanced"
     runMode: Literal["fake", "auto", "real"] = "auto"
     grounding: PreviewGrounding | None = None
 
@@ -601,7 +601,7 @@ async def build_preview_plan(req: PreviewPlanRequest) -> PreviewPlanResponse:
     try:
         preset = coach_preset(req.presetId)
     except ValueError:
-        preset = coach_preset("anthropic-sonnet-46-high")
+        preset = coach_preset("anthropic-haiku-45-balanced")
     provider = str(preset.get("realProvider") or preset.get("provider") or "openai")
     model = str(preset.get("apiModel") or preset.get("modelLabel") or "")
 
