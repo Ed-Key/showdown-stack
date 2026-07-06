@@ -378,5 +378,49 @@ def verify_preview_plan(
     return list(unique.values())
 
 
+_SANITIZE_LIST_FIELDS = {
+    "dangerRules", "mainThreats", "preserveTargets", "leadRules",
+    "backupLeads", "avoidLeads", "earlyPriorities", "uncertainties",
+}
+_PATH_ITEM_RE = re.compile(r"^plan\.(?P<field>[A-Za-z]+)\[(?P<index>\d+)\]")
+
+
+def sanitize_preview_plan(
+    plan: Any,
+    issues: list[PreviewPlanIssue],
+) -> tuple[dict[str, Any], list[str], list[PreviewPlanIssue]]:
+    """Drop flagged list items instead of rejecting the whole plan.
+
+    Issues whose path points into a list field are resolved by removing that
+    item; everything else (summary, winPath, recommendedLead, archetype) is
+    returned as a core issue for the caller's single repair pass. Returns a
+    plain dict so preview_plan.py can re-validate without a circular import.
+    """
+    data = dict(_plan_to_dict(plan))  # shallow copy; list fields replaced below
+    removals: dict[str, set[int]] = {}
+    removed_messages: list[str] = []
+    core_issues: list[PreviewPlanIssue] = []
+
+    for issue in issues:
+        match = _PATH_ITEM_RE.match(issue.path or "")
+        field = match.group("field") if match else None
+        if match and field in _SANITIZE_LIST_FIELDS:
+            removals.setdefault(field, set()).add(int(match.group("index")))
+            removed_messages.append(issue.reason)
+        else:
+            core_issues.append(issue)
+
+    for field, indexes in removals.items():
+        items = list(data.get(field) or [])
+        data[field] = [item for position, item in enumerate(items) if position not in indexes]
+
+    if removed_messages:
+        data["uncertainties"] = [
+            *(data.get("uncertainties") or []),
+            f"{len(removed_messages)} generated claim(s) removed by the mechanics checker.",
+        ]
+    return data, removed_messages, core_issues
+
+
 def issue_messages(issues: list[PreviewPlanIssue]) -> list[str]:
     return [issue.reason for issue in issues]
