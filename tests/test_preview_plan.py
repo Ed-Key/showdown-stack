@@ -667,3 +667,35 @@ async def test_core_issue_gets_one_repair_then_fallback(monkeypatch):
     assert len(repair_calls) == 1
     assert result.source == "fallback"
     assert "core mechanics validation failed" in (result.fallbackReason or "")
+
+
+def test_prompt_includes_possible_formes(monkeypatch):
+    monkeypatch.delenv("SHOWDOWN_PREVIEW_DISABLE_GROUNDING", raising=False)
+    req = PreviewPlanRequest(
+        battleId="b-formes", format="gen9nationaldex", myTeam=default_team(),
+        opponentTeam=["Diancie", "Garchomp"], runMode="fake",
+    )
+    payload = json.loads(_preview_user_prompt(req))
+    assert "possibleFormes" in payload
+    species = {row["species"] for row in payload["possibleFormes"]}
+    assert "Diancie" in species
+    formes = {f["name"] for row in payload["possibleFormes"] for f in row["formes"]}
+    assert "Diancie-Mega" in formes
+
+
+def test_prompt_omits_possible_formes_when_grounding_disabled(monkeypatch):
+    monkeypatch.setenv("SHOWDOWN_PREVIEW_DISABLE_GROUNDING", "1")
+    req = PreviewPlanRequest(
+        battleId="b-formes-off", format="gen9nationaldex", myTeam=default_team(),
+        opponentTeam=["Diancie"], runMode="fake",
+    )
+    payload = json.loads(_preview_user_prompt(req))
+    assert "possibleFormes" not in payload
+    monkeypatch.delenv("SHOWDOWN_PREVIEW_DISABLE_GROUNDING")
+
+
+def test_system_prompt_has_lead_safety_discipline():
+    from showdown_copilot.preview_plan import PREVIEW_SYSTEM_PROMPT
+    lowered = PREVIEW_SYSTEM_PROMPT.lower()
+    assert "possibleformes" in lowered
+    assert "lead" in lowered and "outsped" in lowered

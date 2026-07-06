@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from .dashboard_config import coach_preset
 from .llm_response import parse_jsonish_model_output, response_text, usage_from_responses
 from .mechanics_facts import build_preview_planner_fact_pack
-from .preview_grounding import build_opponent_likely_sets, build_speed_context
+from .preview_grounding import build_opponent_likely_sets, build_possible_formes, build_speed_context
 from .preview_repair import merge_plan_and_repair_usage, repair_preview_plan_json
 from .preview_verifier import issue_messages, sanitize_preview_plan, verify_preview_plan
 
@@ -352,6 +352,11 @@ Grounding discipline:
 - damageSummary cells, opponentLikelySets percentages, and speedContext are supplied evidence. Cite these numbers; never invent numbers of your own.
 - If a claim needs a number that is not supplied, phrase it qualitatively instead.
 - opponentLikelySets are usage statistics for likely sets, not revealed information — attribute them as likelihoods ("usually", "78% of sets"), never as facts about this opponent.
+
+Forme & lead safety:
+- Opponents may Mega-evolve or reveal a hidden battle forme — see possibleFormes and the forme rows (guaranteed=false) in speedContext. Treat these as possibilities, not confirmed facts.
+- A forme can change speed and typing; a Mega often outspeeds and outguns its base forme.
+- Before committing recommendedLead, verify it is not outsped-and-threatened by the fastest plausible opposing forme, Megas included. If your recommended lead is outsped or cleanly OHKO'd by a plausible forme, do not hide it — state the risk and prefer a safer lead.
 """
 
 
@@ -392,6 +397,9 @@ def _preview_user_prompt(req: PreviewPlanRequest) -> str:
         )
         if speed_context:
             payload["speedContext"] = speed_context
+        possible_formes = build_possible_formes(req.opponentTeam)
+        if possible_formes:
+            payload["possibleFormes"] = possible_formes
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
