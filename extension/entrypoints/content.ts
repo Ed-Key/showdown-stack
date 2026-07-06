@@ -66,7 +66,10 @@ export default defineContentScript({
     // start it with `python -m showdown_copilot.proxy`. To bypass the proxy
     // entirely (e.g., when only the engine is running), point this at :7267.
     const PREVIEW_PLAN_PRESET_STORAGE_KEY = 'showdownCopilot.previewPlanPresetId';
-    const DEFAULT_PREVIEW_PLAN_PRESET_ID = 'anthropic-sonnet-46-high';
+    // Haiku 4.5 default: ~29s vs Sonnet 4.6's ~58-69s (measured live). The
+    // plan is usually needed inside the team-preview window, so speed wins;
+    // override per-battle via the showdownCopilot.previewPlanPresetId key.
+    const DEFAULT_PREVIEW_PLAN_PRESET_ID = 'anthropic-haiku-45-balanced';
 
     function configuredPreviewPlanPresetId(): string {
       try {
