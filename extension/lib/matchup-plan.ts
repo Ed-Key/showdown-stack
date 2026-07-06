@@ -82,6 +82,7 @@ export interface PreviewPlanResponse {
   plan: MatchupPlan;
   rawText?: string | null;
   fallbackReason?: string | null;
+  sanitizedClaims?: string[];
 }
 
 export interface PlanFitResult {

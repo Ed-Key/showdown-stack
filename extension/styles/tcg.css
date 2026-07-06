@@ -789,3 +789,5 @@
 /* Matchup plan card: persistent + collapsible (header click toggles). */
 .sc-matchup-plan-card.collapsed > :not(.sc-plan-topline) { display: none; }
 .sc-matchup-plan-card .sc-plan-topline { user-select: none; }
+
+.sc-plan-sanitized { font-size: 10px; opacity: 0.65; margin-top: 4px; }

@@ -37,4 +37,16 @@ describe('renderMatchupPlanCard source labeling', () => {
     expect(chip?.textContent).toContain('heuristic');
     expect(chip?.title).toContain('timeout');
   });
+
+  it('notes removed claims when the checker sanitized the plan', () => {
+    const el = renderMatchupPlanCard(response({ sanitizedClaims: ['bad claim A', 'bad claim B'] } as any));
+    const note = el.querySelector<HTMLElement>('.sc-plan-sanitized');
+    expect(note?.textContent).toContain('2 claims removed');
+    expect(note?.title).toContain('bad claim A');
+  });
+
+  it('omits the sanitized note when nothing was removed', () => {
+    const el = renderMatchupPlanCard(response({}));
+    expect(el.querySelector('.sc-plan-sanitized')).toBeNull();
+  });
 });

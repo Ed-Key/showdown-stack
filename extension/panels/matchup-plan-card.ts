@@ -14,6 +14,10 @@ export function renderMatchupPlanCard(response: PreviewPlanResponse): HTMLElemen
   const threats = (plan.mainThreats ?? []).map((item) => item.pokemon);
   const rules = (plan.dangerRules ?? []).slice(0, 3);
   const leadRules = (plan.leadRules ?? []).slice(0, 2);
+  const sanitized = response.sanitizedClaims ?? [];
+  const sanitizedHtml = sanitized.length
+    ? `<div class="sc-plan-sanitized" title="${escapeHtml(sanitized.join('\n'))}">${sanitized.length} claim${sanitized.length === 1 ? '' : 's'} removed by mechanics checker</div>`
+    : '';
   const sourceHtml = response.source === 'model'
     ? `<span class="sc-plan-chip model">${escapeHtml(response.model || response.provider)} · ${escapeHtml(plan.confidence)}</span>`
     : `<span class="sc-plan-chip heuristic" title="${escapeHtml(response.fallbackReason || 'model unavailable')}">heuristic · model unavailable</span>`;
@@ -50,6 +54,7 @@ export function renderMatchupPlanCard(response: PreviewPlanResponse): HTMLElemen
         ${rules.map((rule) => `<div><strong>${escapeHtml(rule.severity.toUpperCase())}</strong> ${escapeHtml(rule.rule)}</div>`).join('')}
       </div>
     ` : ''}
+    ${sanitizedHtml}
   `;
   return el;
 }
