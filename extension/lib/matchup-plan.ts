@@ -1,3 +1,5 @@
+import type { PreviewGrounding } from './preview-grounding';
+
 export type PlanConfidence = 'low' | 'medium' | 'high';
 export type PlanFitRating = 'good' | 'risky' | 'violates_plan' | 'uncertain';
 
@@ -65,6 +67,7 @@ export interface PreviewPlanRequest {
   teamStats?: Record<string, any>;
   presetId?: string;
   runMode?: 'fake' | 'auto' | 'real';
+  grounding?: PreviewGrounding | null;
 }
 
 export interface PreviewPlanResponse {

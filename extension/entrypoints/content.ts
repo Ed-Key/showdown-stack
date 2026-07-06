@@ -11,6 +11,7 @@ import {
 import { snapshotState } from '../lib/snapshot';
 import { fetchBeliefSnapshot, type BeliefSnapshot } from '../lib/belief-snapshot';
 import { buildDamageMatrix, type DamageMatrix } from '../lib/damage-matrix';
+import { buildPreviewGrounding, type PreviewGrounding } from '../lib/preview-grounding';
 import { computeThreats, type ThreatsReport } from '../lib/threats';
 import { detectConflict, type ConflictWarning } from '../lib/conflict';
 import { fetchExplanation } from '../lib/explainer';
@@ -397,6 +398,7 @@ export default defineContentScript({
         teamStats: { source: 'live-team-preview' },
         presetId: configuredPreviewPlanPresetId(),
         runMode: configuredPreviewPlanRunMode(),
+        grounding: previewGroundingByBattle.get(battleId) ?? null,
       }).then((response) => {
         if (response) {
           console.log('[sc:preview-plan] response', {
@@ -442,6 +444,13 @@ export default defineContentScript({
     // don't double-count the same turn's value.
     const valHistoryByBattle = new Map<string, number[]>();
     const lastTrackedTurnByBattle = new Map<string, number>();
+
+    // ---- Preview grounding (damage-matrix pack for matchup-plan prompts) --
+    // Built once at team preview (belief `.then`, after myAtk/oppAtk exist)
+    // and attached to the plan request for this battleId. Degrades to
+    // undefined (no grounding) if the belief fetch fails or matrices are
+    // empty — never blocks the (ungrounded) plan request itself.
+    const previewGroundingByBattle = new Map<string, PreviewGrounding>();
 
     // ---- Explainer (data only — persisted for post-battle analysis) -----
     // LLM-rendered explanation of the engine's recommendation in plain
@@ -1611,6 +1620,12 @@ export default defineContentScript({
       };
     };
 
+    // Expose the grounding pack built for the current battle's team preview
+    // (damage-matrix cells + per-mon summaries sent with the plan request)
+    // so it can be spot-checked against the ⚔ matrix panel in DevTools.
+    (win as any).__scPreviewGrounding = () =>
+      previewGroundingByBattle.get(String(win.app?.curRoom?.id ?? '')) ?? null;
+
     (win as any).__scPostMortem = (battleId?: string): BattlePostMortem | null => {
       const cur = (win as any).app?.curRoom;
       const curB = cur?.battle;
@@ -1802,7 +1817,6 @@ export default defineContentScript({
         if (myTeam.length && oppTeam.length >= 1) {
           const mySnaps = myTeam.map((p: any) => buildMyPokemon(p, null, win));
           const oppSnaps = oppTeam.map((p: any) => buildOppPokemon(p, win));
-          requestMatchupPlan(b, br, mySnaps, oppSnaps);
 
           fetchBeliefSnapshot(PROXY_BASE_URL, br?.id || '').then((snap: any) => {
             if (snap) lastBeliefSnapshot = snap;
@@ -1824,6 +1838,9 @@ export default defineContentScript({
               beliefByDefender: beliefByOpp,
               field, attackerSide: 'opp',
             });
+            const grounding = buildPreviewGrounding(myAtk, oppAtk);
+            if (grounding) previewGroundingByBattle.set(String(br?.id ?? ''), grounding);
+            requestMatchupPlan(b, br, mySnaps, oppSnaps);
 
             const oppCount = oppSnaps.length;
             const rows = mySnaps.map((m: any) => {
@@ -1854,6 +1871,10 @@ export default defineContentScript({
             hdrEl.textContent = 'Copilot — team preview';
             showStatusOverlay('LEAD PICK: belief fetch failed', 'error');
             statsEl.textContent = `${myTeam.length} v ${oppTeam.length} (belief fetch failed)`;
+            // Belief fetch failed, so no matrices/grounding were built for
+            // this battleId — request an ungrounded plan rather than
+            // blocking the user on a fetch that already failed once.
+            requestMatchupPlan(b, br, mySnaps, oppSnaps);
           });
 
           // Refresh the damage matrix so it tracks the new battle, not the
