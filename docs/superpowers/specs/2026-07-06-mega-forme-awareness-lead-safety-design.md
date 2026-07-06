@@ -116,9 +116,20 @@ Scope guard: only opponent-team species' formes are registered (the plan's threa
 
 This is a **quality** change, not a latency change. It slightly *increases* the prompt (a `possibleFormes` block + a few speed rows: ~a few hundred input tokens for a Mega-heavy team), which is negligible against the ~2,500–2,900 output tokens that dominate latency. It does **not** reduce the ~29s Haiku / ~58s Sonnet numbers. Its latency value is *indirect and real*: by fixing the grounding so the **fast** model (Haiku) produces a **correct** plan, it justifies keeping the Haiku default (~29s) instead of reaching for Sonnet (~58s) for quality — it defends the latency win rather than adding to it. An actual further latency reduction (output-schema slimming) is a separate, deliberately-decoupled follow-up.
 
+## Live validation (2026-07-06)
+
+Regenerated the exact losing battle's preview plan (QAQyyy, `2026-07-06-1153-qaqyyy-natdex-44910647.json`) against the running proxy on the Mega-aware code, real Haiku 4.5, grounding on. Result — the feature demonstrably fixes the loss:
+
+- **Grounding:** `possibleFormes` carried Diancie→Diancie-Mega, Urshifu-\*→Urshifu-Rapid-Strike, Blaziken→Blaziken-Mega; `speedContext` placed Diancie-Mega (110) above Garchomp (102).
+- **Plan behavior (vs. the original that lost):** the original said *"Lead Garchomp… If Diancie leads: prefer earthquake"* and Garchomp was OHKO'd turn 1 by Mega Diancie. The new plan **leads Iron Valiant, not Garchomp**, and its lead reasoning explicitly cites *"if opponent leads Diancie-Mega (base 110 speed via speedContext) you may be pressured."* A danger rule names the exact threat: *"If Diancie Mega-evolves… it reaches base 110 speed, tying or outspeeding Ogerpon-Wellspring… Magic Bounce hazard reflect."* Another flags the fatal lead directly: *"If you lead with Garchomp, Volcarona, or Gholdengo, Kartana (109 speed) will outspeed…"*
+- Sanitize-first dropped 4 verifier false-positives; plan shipped as `source: model` in ~31s.
+
+Acceptance criteria 1–6 met. Minor noise noted (Blaziken-Mega surfaces though regular Blaziken is standard) — see the usage-gating follow-up.
+
 ## Out of scope / recorded follow-ups
 
 - **Deterministic damage-based lead-safety** — extend the extension's `@smogon/calc` matrix to compute Mega-forme damage against your lead, and emit a hard "lead X is OHKO'd by Mega Y" grounding flag. The rigorous version of §5; needs extension work.
 - **Output-schema slimming** for latency (fewer plan fields / shorter reasons → fewer output tokens).
 - **Terastallization** typing/stat modeling.
 - **Verifier weather/ability-immunity awareness** (carried from the previous spec's §9b) — still relevant, still deferred.
+- **Usage-gate off-meta Megas** — Garchomp-Mega/Blaziken-Mega surface from the dex though they're rarely run competitively; gate surfaced Megas by a usage-prior threshold (like `scarfPlausible`) to cut noise. Acceptable for v1 (the prompt frames all formes as possibilities, not facts).
