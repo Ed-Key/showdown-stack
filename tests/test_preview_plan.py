@@ -481,3 +481,60 @@ def test_anthropic_preview_plan_never_sends_thinking_payload():
     source = inspect.getsource(_anthropic_preview_plan)
     assert "SHOWDOWN_PREVIEW_USE_THINKING" not in source
     assert "_anthropic_thinking_payload" not in source
+
+
+@pytest.mark.asyncio
+async def test_anthropic_preview_plan_omits_thinking_even_when_env_enabled(monkeypatch):
+    # Behavioral guard for the production bug: adaptive thinking used to eat the whole
+    # token budget -> empty JSON -> fallback. Even with the thinking env flag set, the
+    # payload sent to Anthropic must never carry a "thinking" key.
+    from showdown_copilot.dashboard_config import coach_preset
+    from showdown_copilot.preview_plan import _anthropic_preview_plan
+
+    monkeypatch.setenv("SHOWDOWN_PREVIEW_USE_THINKING", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+    captured: dict = {}
+
+    valid_plan_json = json.dumps(
+        {
+            "archetype": "balance",
+            "confidence": "medium",
+            "summary": "Trade evenly and win late.",
+            "winPath": "Preserve win conditions and remove hazards.",
+            "recommendedLead": {
+                "pokemon": "Garchomp",
+                "rating": "safe",
+                "reason": "Set rocks safely.",
+            },
+        }
+    )
+
+    async def stub_messages_create(payload, _timeout):
+        captured.update(payload)
+        return {
+            "content": [{"type": "text", "text": valid_plan_json}],
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+
+    # _anthropic_preview_plan does `from .dashboard_agent_service import anthropic_messages_create`
+    # locally, so patch the symbol on its source module.
+    monkeypatch.setattr(
+        "showdown_copilot.dashboard_agent_service.anthropic_messages_create",
+        stub_messages_create,
+    )
+
+    preset = coach_preset("anthropic-sonnet-46-high")
+    req = PreviewPlanRequest(
+        battleId="battle-test-thinking-guard",
+        format="gen9nationaldex",
+        myTeam=default_team(),
+        opponentTeam=["Pelipper", "Kingdra", "Ferrothorn"],
+        presetId="anthropic-sonnet-46-high",
+        runMode="real",
+    )
+
+    plan, _usage, _text = await _anthropic_preview_plan(req, preset, "matchup prompt")
+
+    assert "thinking" not in captured
+    assert plan.recommendedLead.pokemon == "Garchomp"
