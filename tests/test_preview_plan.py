@@ -540,6 +540,58 @@ async def test_anthropic_preview_plan_omits_thinking_even_when_env_enabled(monke
     assert plan.recommendedLead.pokemon == "Garchomp"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_preview_uses_fixed_budget_not_lowered_by_small_preset(monkeypatch):
+    # Regression guard: grounded plans need ~2270-2900 output tokens. The old
+    # min(preset, 2500) clamp truncated them -> malformed JSON -> fallback,
+    # and for Haiku (preset maxOutputTokens=2200) it was even lower. The preview
+    # budget must be the fixed PREVIEW_MAX_OUTPUT_TOKENS regardless of preset.
+    from showdown_copilot.dashboard_config import coach_preset
+    from showdown_copilot.preview_plan import (
+        PREVIEW_MAX_OUTPUT_TOKENS,
+        _anthropic_preview_plan,
+    )
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    captured: dict = {}
+
+    valid_plan_json = json.dumps(
+        {
+            "archetype": "balance",
+            "confidence": "medium",
+            "summary": "Trade evenly.",
+            "winPath": "Preserve win conditions.",
+            "recommendedLead": {"pokemon": "Garchomp", "rating": "safe", "reason": "Rocks."},
+        }
+    )
+
+    async def stub_messages_create(payload, _timeout):
+        captured.update(payload)
+        return {"content": [{"type": "text", "text": valid_plan_json}], "usage": {"input_tokens": 10, "output_tokens": 20}}
+
+    monkeypatch.setattr(
+        "showdown_copilot.dashboard_agent_service.anthropic_messages_create",
+        stub_messages_create,
+    )
+
+    # Haiku's preset maxOutputTokens (2200) is BELOW the grounded plan's need;
+    # a min(preset, ...) clamp would truncate. The fixed budget must win.
+    preset = coach_preset("anthropic-haiku-45-balanced")
+    assert int(preset.get("maxOutputTokens")) < PREVIEW_MAX_OUTPUT_TOKENS  # the trap
+    req = PreviewPlanRequest(
+        battleId="battle-test-budget",
+        format="gen9nationaldex",
+        myTeam=default_team(),
+        opponentTeam=["Pelipper", "Kingdra", "Ferrothorn"],
+        presetId="anthropic-haiku-45-balanced",
+        runMode="real",
+    )
+
+    await _anthropic_preview_plan(req, preset, "matchup prompt")
+
+    assert captured["max_tokens"] == PREVIEW_MAX_OUTPUT_TOKENS
+
+
 def _plan_with_bad_threat() -> MatchupPlan:
     return MatchupPlan(
         archetype="rain offense", confidence="medium",

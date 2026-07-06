@@ -336,6 +336,14 @@ def _fallback_plan(req: PreviewPlanRequest, reason: str | None = None) -> Previe
     )
 
 
+# Grounded preview plans (Task 11 grounding) need ~2270-2900 output tokens
+# (measured across Haiku 4.5 / Sonnet 4.6, multiple samples). A fixed budget
+# with headroom prevents truncation-to-fallback; it intentionally ignores the
+# dashboard preset's maxOutputTokens (tuned for other tool-use flows, and as
+# low as 2200 for Haiku — below the grounded plan's need).
+PREVIEW_MAX_OUTPUT_TOKENS = 4000
+
+
 PREVIEW_SYSTEM_PROMPT = """You are Showdown Copilot's live Pokemon team-preview planner.
 
 Create a concise, structured matchup plan from team preview. You know hidden sets are uncertain.
@@ -527,7 +535,7 @@ async def _openai_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any], 
             "instructions": PREVIEW_SYSTEM_PROMPT,
             "input": user_prompt,
             "reasoning": {"effort": preset.get("openaiReasoningEffort") or "medium"},
-            "max_output_tokens": min(int(preset.get("maxOutputTokens") or 1800), 2500),
+            "max_output_tokens": PREVIEW_MAX_OUTPUT_TOKENS,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -560,7 +568,7 @@ async def _anthropic_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any
         "model": model,
         "system": PREVIEW_SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": user_prompt}],
-        "max_tokens": min(int(preset.get("maxOutputTokens") or 2200), 2500),
+        "max_tokens": PREVIEW_MAX_OUTPUT_TOKENS,
     }
     output_config = payload.get("output_config") if isinstance(payload.get("output_config"), dict) else {}
     payload["output_config"] = {
