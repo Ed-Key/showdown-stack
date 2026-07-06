@@ -75,6 +75,48 @@ def get_pokemon_facts(species: str) -> dict[str, Any]:
     }
 
 
+def get_hidden_formes(species: str) -> list[dict[str, Any]]:
+    """Preview-relevant alternate formes of a species: Mega evolutions (always)
+    and hidden battle formes reachable behind a team-preview wildcard (e.g.
+    "Urshifu-*" -> Urshifu-Rapid-Strike). Pure gen-9 dex lookup; returns [] for
+    a forme-less or unknown species.
+    """
+    raw = str(species or "").strip()
+    is_wildcard = raw.endswith("*")
+    base_id = resolve_species_id(raw)
+    if not base_id:
+        return []
+    base_entry = _gen9().pokedex.get(base_id) or {}
+    formes: list[dict[str, Any]] = []
+    for forme_name in base_entry.get("otherFormes") or []:
+        forme_id = resolve_species_id(str(forme_name))
+        if not forme_id:
+            continue
+        entry = _gen9().pokedex.get(forme_id) or {}
+        forme_tag = str(entry.get("forme") or "")
+        is_mega = forme_tag.startswith("Mega")
+        if is_mega:
+            forme_kind, basis = "Mega", "mega-evolution"
+        elif is_wildcard and "Tera" not in str(forme_name):
+            forme_kind, basis = "Battle", "team-preview-forme"
+        else:
+            continue
+        stats = entry.get("baseStats") if isinstance(entry.get("baseStats"), dict) else {}
+        abilities = entry.get("abilities") if isinstance(entry.get("abilities"), dict) else {}
+        formes.append({
+            "name": entry.get("name") or str(forme_name),
+            "formeKind": forme_kind,
+            "basis": basis,
+            "types": [str(t) for t in (entry.get("types") or [])],
+            "abilities": [str(a) for a in abilities.values()],
+            "spe": int(stats.get("spe") or 0),
+            "atk": int(stats.get("atk") or 0),
+            "spa": int(stats.get("spa") or 0),
+            "triggerItem": entry.get("requiredItem"),
+        })
+    return formes
+
+
 def get_move_facts(move: str) -> dict[str, Any]:
     move_id = resolve_move_id(move)
     if not move_id:

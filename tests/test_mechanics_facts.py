@@ -97,3 +97,55 @@ def test_preview_planner_fact_pack_is_compact_and_marks_dynamic_moves():
     assert move_by_name["Tera Starstorm"]["type"] == "Normal"
     assert move_by_name["Tera Starstorm"]["dynamicType"] is True
     assert move_by_name["Rapid Spin"]["dynamicType"] is False
+
+
+from showdown_copilot.mechanics_facts import get_hidden_formes
+
+
+def test_get_hidden_formes_diancie_mega():
+    formes = get_hidden_formes("Diancie")
+    assert len(formes) == 1
+    m = formes[0]
+    assert m["name"] == "Diancie-Mega"
+    assert m["formeKind"] == "Mega"
+    assert m["basis"] == "mega-evolution"
+    assert m["types"] == ["Rock", "Fairy"]
+    assert m["abilities"] == ["Magic Bounce"]
+    assert m["spe"] == 110
+    assert m["triggerItem"] == "Diancite"
+
+
+def test_get_hidden_formes_charizard_two_megas():
+    names = {f["name"] for f in get_hidden_formes("Charizard")}
+    assert names == {"Charizard-Mega-X", "Charizard-Mega-Y"}
+    by_name = {f["name"]: f for f in get_hidden_formes("Charizard")}
+    assert by_name["Charizard-Mega-X"]["types"] == ["Fire", "Dragon"]
+    assert by_name["Charizard-Mega-Y"]["types"] == ["Fire", "Flying"]
+    assert all(f["formeKind"] == "Mega" for f in get_hidden_formes("Charizard"))
+
+
+def test_get_hidden_formes_urshifu_wildcard_battle_forme():
+    formes = get_hidden_formes("Urshifu-*")
+    names = {f["name"] for f in formes}
+    assert "Urshifu-Rapid-Strike" in names
+    rapid = next(f for f in formes if f["name"] == "Urshifu-Rapid-Strike")
+    assert rapid["formeKind"] == "Battle"
+    assert rapid["basis"] == "team-preview-forme"
+    assert rapid["types"] == ["Fighting", "Water"]
+    assert rapid["triggerItem"] is None
+
+
+def test_get_hidden_formes_none_for_plain_species():
+    # Kingambit is genuinely forme-less (no Mega, no battle forme). NOTE: do NOT
+    # use Garchomp here — Mega Garchomp exists in the NatDex dex.
+    assert get_hidden_formes("Kingambit") == []
+
+
+def test_get_hidden_formes_no_battle_formes_without_wildcard():
+    # Ogerpon-Wellspring is a concrete preview species (not a wildcard) and has
+    # no Mega; its Tera/other formes must NOT be enumerated.
+    assert get_hidden_formes("Ogerpon-Wellspring") == []
+
+
+def test_get_hidden_formes_unknown_species():
+    assert get_hidden_formes("Notarealmon") == []
