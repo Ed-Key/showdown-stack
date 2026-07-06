@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -73,9 +74,22 @@ async def main() -> None:
     parser.add_argument("--min-schema", type=int, default=7)
     parser.add_argument("--preset", default="openai-gpt-54-mini-balanced")
     parser.add_argument("--run-mode", choices=["fake", "auto", "real"], default="fake")
+    parser.add_argument("--battle", default=None,
+                        help="Path to a single postmortem JSON to replay (overrides --limit scanning)")
+    parser.add_argument("--grounding", choices=["on", "off"], default="on",
+                        help="off sets SHOWDOWN_PREVIEW_DISABLE_GROUNDING=1 for this run")
     args = parser.parse_args()
 
-    postmortems = _load_recent_postmortems(Path(args.postmortem_dir), args.limit, args.min_schema)
+    if args.grounding == "off":
+        os.environ["SHOWDOWN_PREVIEW_DISABLE_GROUNDING"] = "1"
+    else:
+        os.environ.pop("SHOWDOWN_PREVIEW_DISABLE_GROUNDING", None)
+
+    if args.battle:
+        data = json.loads(Path(args.battle).read_text(encoding="utf-8"))
+        postmortems = [data]
+    else:
+        postmortems = _load_recent_postmortems(Path(args.postmortem_dir), args.limit, args.min_schema)
     if not postmortems:
         print("No matching postmortems found.")
         return
@@ -91,6 +105,11 @@ async def main() -> None:
         print(f"Source: {response.source} provider={response.provider} model={response.model or 'n/a'} latency={response.latencyMs}ms")
         print(f"Plan: {response.plan.archetype} ({response.plan.confidence})")
         print("Win path:", response.plan.winPath)
+        sanitized = list(getattr(response, "sanitizedClaims", None) or [])
+        if sanitized:
+            print(f"Sanitized claims ({len(sanitized)}):")
+            for message in sanitized:
+                print(f"  - {message}")
         print("Lead:", response.plan.recommendedLead.pokemon, "-", response.plan.recommendedLead.reason)
         if response.plan.preserveTargets:
             print("Preserve:", "; ".join(f"{p.pokemon}: {p.reason}" for p in response.plan.preserveTargets))
