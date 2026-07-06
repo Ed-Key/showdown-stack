@@ -149,3 +149,12 @@ def test_get_hidden_formes_no_battle_formes_without_wildcard():
 
 def test_get_hidden_formes_unknown_species():
     assert get_hidden_formes("Notarealmon") == []
+
+
+def test_get_hidden_formes_wildcard_excludes_tera_formes():
+    # Exercises the `"Tera" not in forme_name` gate: a wildcard whose base has
+    # both battle formes and -Tera variants must yield the battle formes and
+    # exclude every -Tera sibling.
+    names = {f["name"] for f in get_hidden_formes("Ogerpon-*")}
+    assert names == {"Ogerpon-Wellspring", "Ogerpon-Hearthflame", "Ogerpon-Cornerstone"}
+    assert not any("Tera" in n for n in names)
