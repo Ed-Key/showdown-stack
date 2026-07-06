@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .mechanics_facts import get_pokemon_facts, normalize_key, type_multiplier
+from .mechanics_facts import get_hidden_formes, get_pokemon_facts, normalize_key, type_multiplier
 
 IssueSeverity = Literal["low", "medium", "high"]
 
@@ -97,6 +97,34 @@ def _has_sand_evidence(opponent_team: list[str]) -> bool:
     return bool({normalize_key(item) for item in opponent_team} & sand_setters)
 
 
+def _hidden_forme_names(known_species: list[str]) -> list[str]:
+    names: list[str] = []
+    for species in known_species:
+        try:
+            for forme in get_hidden_formes(species):
+                name = str(forme.get("name") or "")
+                if name:
+                    names.append(name)
+        except Exception:  # noqa: BLE001 - forme lookup must never break verification
+            continue
+    return names
+
+
+def _species_applies(species: str, text: str, all_names: list[str]) -> bool:
+    """True if `species` matches `text` and is the most specific match — i.e. no
+    longer registered name that contains it also matches this text. Prevents a
+    base name ('Charizard') from matching inside a forme mention ('Charizard-Mega-X')."""
+    sn = normalize_key(species)
+    nt = normalize_key(text)
+    if not sn or sn not in nt:
+        return False
+    for other in all_names:
+        on = normalize_key(other)
+        if len(on) > len(sn) and sn in on and on in nt:
+            return False
+    return True
+
+
 def _known_species_names(plan_dict: dict[str, Any], known_species: list[str]) -> list[str]:
     names: dict[str, str] = {}
     for species in known_species:
@@ -116,6 +144,12 @@ def _known_species_names(plan_dict: dict[str, Any], known_species: list[str]) ->
         for species in known_species:
             if normalize_key(species) and normalize_key(species) in normalize_key(text):
                 names[normalize_key(species)] = species
+
+    for forme_name in _hidden_forme_names(known_species):
+        for _path, text in iter_plan_strings(plan_dict):
+            if normalize_key(forme_name) and normalize_key(forme_name) in normalize_key(text):
+                names[normalize_key(forme_name)] = forme_name
+                break
     return sorted(names.values(), key=len, reverse=True)
 
 
@@ -182,7 +216,7 @@ def _type_multiplier_issues(
         if found_multipliers:
             for species in species_names:
                 facts = get_pokemon_facts(species)
-                if not facts.get("found") or normalize_key(species) not in normalize_key(text):
+                if not facts.get("found") or not _species_applies(species, text, species_names):
                     continue
                 defender_types = [str(item) for item in facts.get("types") or []]
                 for attack_type in POKEMON_TYPES:
@@ -217,7 +251,7 @@ def _type_multiplier_issues(
 
         for species in species_names:
             facts = get_pokemon_facts(species)
-            if not facts.get("found") or normalize_key(species) not in normalize_key(text):
+            if not facts.get("found") or not _species_applies(species, text, species_names):
                 continue
             defender_types = [str(item) for item in facts.get("types") or []]
             for clause in _clauses_for_species(text, species):
