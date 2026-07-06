@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .mechanics_facts import get_pokemon_facts
+from .mechanics_facts import get_hidden_formes, get_pokemon_facts
 from .priors import PriorsSource
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,28 @@ def build_opponent_likely_sets(opponent_team: list[str], fmt: str) -> list[dict[
     return rows
 
 
+def build_possible_formes(opponent_team: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for species in opponent_team:
+        if not species:
+            continue
+        try:
+            formes = get_hidden_formes(species)
+        except Exception:  # noqa: BLE001 - a dex hiccup skips the species only
+            logger.warning("preview grounding: get_hidden_formes failed for %s", species, exc_info=True)
+            continue
+        if not formes:
+            continue
+        base = get_pokemon_facts(species)
+        rows.append({
+            "species": species,
+            "baseTypes": base.get("types") or [],
+            "baseSpeed": int((base.get("baseStats") or {}).get("spe") or 0),
+            "formes": formes,
+        })
+    return rows
+
+
 def build_speed_context(
     my_species: list[str],
     opponent_species: list[str],
@@ -63,6 +85,19 @@ def build_speed_context(
                 continue
             base_speed = int((facts.get("baseStats") or {}).get("spe") or 0)
             rows.append({"species": str(facts.get("name") or name), "side": side, "baseSpeed": base_speed})
+            if side == "opp":
+                try:
+                    hidden = get_hidden_formes(name)
+                except Exception:  # noqa: BLE001 - never block speed context on a forme lookup
+                    hidden = []
+                for forme in hidden:
+                    rows.append({
+                        "species": forme["name"],
+                        "side": "opp",
+                        "baseSpeed": int(forme.get("spe") or 0),
+                        "forme": forme.get("formeKind"),
+                        "guaranteed": False,
+                    })
     if not rows:
         return {}
     rows.sort(key=lambda row: -row["baseSpeed"])
