@@ -75,7 +75,9 @@ def test_get_hidden_formes_urshifu_wildcard_battle_forme():
 
 
 def test_get_hidden_formes_none_for_plain_species():
-    assert get_hidden_formes("Garchomp") == []
+    # Kingambit is genuinely forme-less (no Mega, no battle forme). NOTE: do NOT
+    # use Garchomp here — Mega Garchomp exists in the NatDex dex.
+    assert get_hidden_formes("Kingambit") == []
 
 
 def test_get_hidden_formes_no_battle_formes_without_wildcard():
@@ -175,17 +177,17 @@ from showdown_copilot.preview_grounding import build_possible_formes
 
 
 def test_build_possible_formes_surfaces_mega_and_wildcard():
-    rows = build_possible_formes(["Diancie", "Urshifu-*", "Garchomp"])
+    rows = build_possible_formes(["Diancie", "Urshifu-*", "Kingambit"])
     by_species = {r["species"]: r for r in rows}
     assert "Diancie" in by_species and "Urshifu-*" in by_species
-    assert "Garchomp" not in by_species  # no hidden forme
+    assert "Kingambit" not in by_species  # genuinely forme-less (Mega Garchomp exists — don't use Garchomp)
     diancie_formes = {f["name"] for f in by_species["Diancie"]["formes"]}
     assert diancie_formes == {"Diancie-Mega"}
     assert by_species["Diancie"]["baseSpeed"] == 50
 
 
 def test_build_possible_formes_empty_for_forme_less_team():
-    assert build_possible_formes(["Garchomp", "Kingambit"]) == []
+    assert build_possible_formes(["Kingambit", "Great Tusk"]) == []
 
 
 def test_speed_context_includes_mega_row_above_base():
