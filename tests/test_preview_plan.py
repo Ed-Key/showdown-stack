@@ -409,3 +409,75 @@ def test_preview_prompt_includes_verified_mechanics_fact_pack():
     )
     assert tera_starstorm["dynamicType"] is True
     assert "Chlorophyll" not in json.dumps(mechanics)
+
+
+def _grounded_request(**overrides):
+    from showdown_copilot.preview_plan import GroundingCell, MonSummary, PreviewGrounding
+
+    base = dict(
+        battleId="battle-grounded",
+        format="gen9nationaldex",
+        myTeam=default_team(),
+        opponentTeam=["Pelipper", "Kingdra"],
+        runMode="fake",
+        grounding=PreviewGrounding(
+            damageCells=[GroundingCell(
+                attacker="Kingdra", defender="Ogerpon-Wellspring", move="Draco Meteor",
+                pct="24-29", ohko=False, direction="opp",
+            )],
+            monSummaries=[
+                MonSummary(species="Ogerpon-Wellspring", survives=2, threatens=2),
+                MonSummary(species="Garchomp", survives=1, threatens=0),
+            ],
+        ),
+    )
+    base.update(overrides)
+    return PreviewPlanRequest(**base)
+
+
+def test_prompt_includes_grounding_sections(monkeypatch):
+    monkeypatch.setattr(
+        "showdown_copilot.preview_plan.build_opponent_likely_sets",
+        lambda team, fmt: [{"species": "Kingdra", "basis": "usage-statistics", "scarfPct": 30,
+                            "topMoves": [], "topItems": [], "topAbilities": [], "topTera": []}],
+    )
+    monkeypatch.setattr(
+        "showdown_copilot.preview_plan.build_speed_context",
+        lambda mine, opp, likely_sets=None: {"baseSpeedOrder": [], "scarfPlausible": ["Kingdra"]},
+    )
+    prompt = _preview_user_prompt(_grounded_request())
+    payload = json.loads(prompt)
+    assert payload["damageSummary"]["damageCells"][0]["pct"] == "24-29"
+    assert payload["opponentLikelySets"][0]["species"] == "Kingdra"
+    assert payload["speedContext"]["scarfPlausible"] == ["Kingdra"]
+
+
+def test_prompt_omits_grounding_when_absent_or_disabled(monkeypatch):
+    monkeypatch.setenv("SHOWDOWN_PREVIEW_DISABLE_GROUNDING", "1")
+    req = PreviewPlanRequest(
+        battleId="b", format="gen9nationaldex", myTeam=default_team(),
+        opponentTeam=["Pelipper"], runMode="fake",
+    )
+    payload = json.loads(_preview_user_prompt(req))
+    assert "damageSummary" not in payload
+    assert "opponentLikelySets" not in payload
+    assert "speedContext" not in payload
+    monkeypatch.delenv("SHOWDOWN_PREVIEW_DISABLE_GROUNDING")
+
+
+@pytest.mark.asyncio
+async def test_fallback_lead_uses_grounding_summaries(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = await build_preview_plan(_grounded_request())
+    # Ogerpon-Wellspring has the best survives+threatens, so it beats slot order.
+    assert result.plan.recommendedLead.pokemon == "Ogerpon-Wellspring"
+
+
+def test_anthropic_preview_plan_never_sends_thinking_payload():
+    import inspect
+
+    from showdown_copilot.preview_plan import _anthropic_preview_plan
+
+    source = inspect.getsource(_anthropic_preview_plan)
+    assert "SHOWDOWN_PREVIEW_USE_THINKING" not in source
+    assert "_anthropic_thinking_payload" not in source

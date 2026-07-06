@@ -8,6 +8,7 @@ the returned structured plan.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Any, Literal
@@ -17,8 +18,11 @@ from pydantic import BaseModel, Field
 from .dashboard_config import coach_preset
 from .llm_response import parse_jsonish_model_output, response_text, usage_from_responses
 from .mechanics_facts import build_preview_planner_fact_pack
+from .preview_grounding import build_opponent_likely_sets, build_speed_context
 from .preview_repair import merge_plan_and_repair_usage, repair_preview_plan_json
 from .preview_verifier import issue_messages, verify_preview_plan
+
+logger = logging.getLogger(__name__)
 
 try:
     from fastapi import HTTPException
@@ -89,6 +93,27 @@ class MatchupPlan(BaseModel):
     uncertainties: list[str] = Field(default_factory=list)
 
 
+class GroundingCell(BaseModel):
+    attacker: str
+    defender: str
+    move: str
+    pct: str
+    ohko: bool = False
+    direction: Literal["mine", "opp"] = "mine"
+
+
+class MonSummary(BaseModel):
+    species: str
+    survives: int = 0
+    threatens: int = 0
+
+
+class PreviewGrounding(BaseModel):
+    damageCells: list[GroundingCell] = Field(default_factory=list)
+    monSummaries: list[MonSummary] = Field(default_factory=list)
+    source: str = "extension-damage-matrix"
+
+
 class PreviewPlanRequest(BaseModel):
     battleId: str = "preview"
     format: str = "gen9nationaldex"
@@ -97,6 +122,7 @@ class PreviewPlanRequest(BaseModel):
     teamStats: dict[str, Any] = Field(default_factory=dict)
     presetId: str = "anthropic-sonnet-46-high"
     runMode: Literal["fake", "auto", "real"] = "auto"
+    grounding: PreviewGrounding | None = None
 
 
 class PreviewPlanResponse(BaseModel):
@@ -207,7 +233,11 @@ def _fallback_plan(req: PreviewPlanRequest, reason: str | None = None) -> Previe
                 return best
         return req.myTeam[0] if req.myTeam else PreviewPokemon(species="Unknown")
 
-    mon_summaries = None  # Task 11 threads req.grounding.monSummaries through here.
+    mon_summaries = (
+        [row.model_dump() for row in req.grounding.monSummaries]
+        if req.grounding and req.grounding.monSummaries
+        else None
+    )
     recommended = _pick_lead(mon_summaries)
     recommended_lead = LeadOption(
         pokemon=recommended.species,
@@ -322,6 +352,11 @@ Mechanics discipline:
 - Do not claim a KO/OHKO without a damage calculation. Use "threatens", "pressures", or "likely" when preview-only.
 - Do not state type, ability, weather, hazard, or immunity interactions as facts unless the supplied evidence supports them.
 - If a mechanic, set, item, or ability is uncertain, put it in uncertainties instead of stating it as fact.
+
+Grounding discipline:
+- damageSummary cells, opponentLikelySets percentages, and speedContext are supplied evidence. Cite these numbers; never invent numbers of your own.
+- If a claim needs a number that is not supplied, phrase it qualitatively instead.
+- opponentLikelySets are usage statistics for likely sets, not revealed information — attribute them as likelihoods ("usually", "78% of sets"), never as facts about this opponent.
 """
 
 
@@ -351,6 +386,17 @@ def _preview_user_prompt(req: PreviewPlanRequest) -> str:
             "uncertainties": ["string"],
         },
     }
+    if req.grounding and (req.grounding.damageCells or req.grounding.monSummaries):
+        payload["damageSummary"] = req.grounding.model_dump()
+    if os.environ.get("SHOWDOWN_PREVIEW_DISABLE_GROUNDING") != "1":
+        likely_sets = build_opponent_likely_sets(req.opponentTeam, req.format)
+        if likely_sets:
+            payload["opponentLikelySets"] = likely_sets
+        speed_context = build_speed_context(
+            [mon.species for mon in req.myTeam], req.opponentTeam, likely_sets or None,
+        )
+        if speed_context:
+            payload["speedContext"] = speed_context
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
@@ -470,7 +516,7 @@ def model_plan_mechanics_violations(plan: MatchupPlan, opponent_team: list[str])
     return issue_messages(verify_preview_plan(plan, opponent_team))
 
 
-async def _openai_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any]) -> tuple[MatchupPlan, dict[str, Any], str]:
+async def _openai_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any], user_prompt: str) -> tuple[MatchupPlan, dict[str, Any], str]:
     from .dashboard_agent_service import openai_responses_create
 
     model = str(preset.get("apiModel") or os.environ.get("SHOWDOWN_OPENAI_FAST_MODEL") or "gpt-5.4-mini")
@@ -478,7 +524,7 @@ async def _openai_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any]) 
         {
             "model": model,
             "instructions": PREVIEW_SYSTEM_PROMPT,
-            "input": _preview_user_prompt(req),
+            "input": user_prompt,
             "reasoning": {"effort": preset.get("openaiReasoningEffort") or "medium"},
             "max_output_tokens": int(preset.get("maxOutputTokens") or 1800),
             "text": {
@@ -505,18 +551,16 @@ def _anthropic_response_text(response: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
-async def _anthropic_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any]) -> tuple[MatchupPlan, dict[str, Any], str]:
-    from .dashboard_agent_service import anthropic_messages_create, _anthropic_thinking_payload
+async def _anthropic_preview_plan(req: PreviewPlanRequest, preset: dict[str, Any], user_prompt: str) -> tuple[MatchupPlan, dict[str, Any], str]:
+    from .dashboard_agent_service import anthropic_messages_create
 
     model = str(preset.get("apiModel") or os.environ.get("SHOWDOWN_ANTHROPIC_FAST_MODEL") or "claude-haiku-4-5")
     payload = {
         "model": model,
         "system": PREVIEW_SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": _preview_user_prompt(req)}],
+        "messages": [{"role": "user", "content": user_prompt}],
         "max_tokens": int(preset.get("maxOutputTokens") or 2200),
     }
-    if os.environ.get("SHOWDOWN_PREVIEW_USE_THINKING") == "1":
-        payload.update(_anthropic_thinking_payload(preset))
     output_config = payload.get("output_config") if isinstance(payload.get("output_config"), dict) else {}
     payload["output_config"] = {
         **output_config,
@@ -564,11 +608,15 @@ async def build_preview_plan(req: PreviewPlanRequest) -> PreviewPlanResponse:
     if not should_call_model:
         return _fallback_plan(req, reason="model provider not configured or fake mode selected")
 
+    user_prompt = _preview_user_prompt(req)
+    if os.environ.get("SHOWDOWN_PREVIEW_LOG_PROMPT") == "1":
+        logger.info("preview-plan prompt for %s:\n%s", req.battleId, user_prompt)
+
     try:
         if provider == "openai":
-            plan, usage, raw_text = await _openai_preview_plan(req, preset)
+            plan, usage, raw_text = await _openai_preview_plan(req, preset, user_prompt)
         elif provider == "anthropic":
-            plan, usage, raw_text = await _anthropic_preview_plan(req, preset)
+            plan, usage, raw_text = await _anthropic_preview_plan(req, preset, user_prompt)
         else:
             return _fallback_plan(req, reason=f"provider {provider} is not wired for preview planning")
     except HTTPException as exc:
