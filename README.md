@@ -20,6 +20,11 @@ The last one is the clearest worked example. A recent loss came from leading a P
 
 ## Architecture
 
+<img src="docs/media/architecture.png" alt="Architecture diagram: Chrome extension talks to the Python FastAPI proxy, which feeds the Rust MCTS engine, the grounded matchup planner and LLM API, and the postmortem store behind the React dashboard" width="820">
+
+<details>
+<summary>Same diagram as Mermaid source</summary>
+
 ```mermaid
 flowchart TB
     subgraph browser["Chrome"]
@@ -51,6 +56,8 @@ flowchart TB
     proxy -->|K sampled opponent hypotheses| engine
     planner -->|grounded prompt| llm
 ```
+
+</details>
 
 The Rust search engine and the neural sidecar are separate components with their own repositories. This repository is the integration and intelligence layer: the browser extension, the proxy where the belief tracking and LLM grounding and verification live, and the postgame dashboard.
 
