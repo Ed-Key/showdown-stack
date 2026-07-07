@@ -20,25 +20,36 @@ The last one is the clearest worked example. A recent loss came from leading a P
 
 ## Architecture
 
-```text
-Pokemon Showdown page
-        |
-        v
-TypeScript WXT extension            live overlay, damage matrix, page-state translation
-        |
-        v
-Python FastAPI proxy (:7271)        this repo's core
-  - belief tracking over opponents
-  - Smogon usage priors, speed / Choice Scarf inference
-  - PIMC hidden-information hypotheses
-  - grounded matchup planner (LLM) + sanitize-first verifier
-  - postmortems, annotations, dashboard API
-        |
-        v
-Rust Axum engine (:7270)            separate repo: MCTS / PUCT, heuristic priors, forced playouts
-        |
-        v
-Python Metamon sidecar (:7273)     separate repo: Kakuna neural policy prior at the search root
+```mermaid
+flowchart TB
+    subgraph browser["Chrome"]
+        page["Pokemon Showdown battle page"]
+        ext["TypeScript WXT extension<br/>live overlay · damage matrix · page-state translation"]
+        page --> ext
+    end
+
+    subgraph repo["This repository"]
+        proxy["Python FastAPI proxy :7271<br/>belief tracking · usage priors · speed inference<br/>PIMC hidden-information hypotheses"]
+        planner["Grounded matchup planner<br/>damage + priors + forme grounding<br/>sanitize-first mechanics verifier"]
+        store[("Battle postmortems<br/>+ engine replays")]
+        dash["React dashboard<br/>postgame analytics"]
+        proxy --- planner
+        proxy --> store
+        store -->|dashboard API| dash
+    end
+
+    subgraph engines["Separate repositories"]
+        engine["Rust Axum engine :7270<br/>MCTS / PUCT · heuristic priors · forced playouts"]
+        nn["Python Metamon sidecar :7273<br/>Kakuna neural policy prior at the search root"]
+        engine --> nn
+    end
+
+    llm["LLM API<br/>Claude Haiku 4.5 by default"]
+
+    ext -->|battle state| proxy
+    proxy -->|recommendations + plan| ext
+    proxy -->|K sampled opponent hypotheses| engine
+    planner -->|grounded prompt| llm
 ```
 
 The Rust search engine and the neural sidecar are separate components with their own repositories. This repository is the integration and intelligence layer: the browser extension, the proxy where the belief tracking and LLM grounding and verification live, and the postgame dashboard.
