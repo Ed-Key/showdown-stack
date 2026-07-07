@@ -44,7 +44,9 @@ The Rust search engine and the neural sidecar are separate components with their
 
 ## Features
 
-**Live battle overlay.** A floating panel in the Showdown battle page showing the recommended move with per-hypothesis vote confidence, the engine's principal variation, opponent-threat conflicts, and a team-preview matchup plan.
+**Live battle overlay.** A floating panel in the Showdown battle page showing the recommended action with per-hypothesis vote confidence (each orb is one sampled opponent hypothesis), the engine's principal variation, opponent-threat conflicts, and a team-preview matchup plan.
+
+<img src="docs/media/tcg-card.png" alt="Recommendation card: switch to Gholdengo, with per-hypothesis votes, threat weakness, and retreat cost" width="400">
 
 <img src="docs/media/engine-pv.png" alt="Engine principal variation at depth 4 over 2.2M simulations" width="500">
 
