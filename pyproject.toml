@@ -7,7 +7,6 @@ dependencies = [
     "httpx>=0.27.0",
     "textual>=0.80",
     "smog-usage-stats>=1.0.8",
-    "battle-testing @ file:///Users/edkiboma/Projects/pokemon-ai/battle-testing",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +34,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/showdown_copilot"]
+packages = ["src/showdown_copilot", "src/battle_testing"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

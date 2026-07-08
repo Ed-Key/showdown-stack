@@ -129,6 +129,7 @@ uv run pytest
 |---|---|
 | `extension/` | TypeScript WXT Chrome extension: live overlay, damage matrix, page-state translation |
 | `src/showdown_copilot/` | Python proxy: belief tracking, grounding, matchup planner, verifier, dashboard API |
+| `src/battle_testing/` | Battle-state and poke-env adapter layer shared with the offline testing harness |
 | `dashboard-web/` | React postgame analytics dashboard |
 | `tests/` | Proxy test suite |
 | `docs/` | Runbook and design specs (`docs/superpowers/specs`) |

@@ -34,24 +34,6 @@ wheels = [
 ]
 
 [[package]]
-name = "battle-testing"
-version = "0.1.0"
-source = { directory = "/Users/edkiboma/Projects/pokemon-ai/battle-testing" }
-dependencies = [
-    { name = "httpx" },
-    { name = "poke-env" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "poke-env", specifier = ">=0.7.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "beautifulsoup4"
 version = "4.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -753,7 +735,6 @@ name = "showdown-copilot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "battle-testing" },
     { name = "httpx" },
     { name = "poke-env" },
     { name = "smog-usage-stats" },
@@ -775,7 +756,6 @@ proxy = [
 
 [package.metadata]
 requires-dist = [
-    { name = "battle-testing", directory = "/Users/edkiboma/Projects/pokemon-ai/battle-testing" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.110" },
     { name = "groq", marker = "extra == 'proxy'", specifier = ">=0.11.0" },
     { name = "httpx", specifier = ">=0.27.0" },
