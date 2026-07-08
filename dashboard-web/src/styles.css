@@ -466,6 +466,38 @@ h1 {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Glare sweep on hover, adapted from reactbits.dev GlareHover */
+.primary-button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    -60deg,
+    hsla(0, 0%, 0%, 0) 60%,
+    rgba(255, 255, 255, 0.6) 70%,
+    hsla(0, 0%, 0%, 0) 100%
+  );
+  background-size: 250% 250%;
+  background-repeat: no-repeat;
+  background-position: -100% -100%;
+  pointer-events: none;
+}
+
+.primary-button:hover::before {
+  animation: glare-sweep 0.9s ease forwards;
+}
+
+@keyframes glare-sweep {
+  from {
+    background-position: -100% -100%;
+  }
+  to {
+    background-position: 100% 100%;
+  }
 }
 
 .secondary-button {
@@ -683,6 +715,29 @@ h1 {
 
 .battle-row {
   grid-template-columns: minmax(0, 1fr) auto;
+  animation: battle-row-in 0.45s ease both;
+  transition: background 0.2s ease;
+}
+
+.battle-row:hover {
+  background: linear-gradient(90deg, rgba(255, 216, 61, 0.06), transparent 70%);
+}
+
+@keyframes battle-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .battle-row {
+    animation: none;
+  }
 }
 
 .battle-row h3 {

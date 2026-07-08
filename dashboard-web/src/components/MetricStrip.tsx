@@ -1,5 +1,6 @@
 import type { DashboardSummary } from '../types';
 import { CountUpValue } from './CountUpValue';
+import SpotlightCard from './reactbits/SpotlightCard';
 
 interface MetricStripProps {
   summary: DashboardSummary | null;
@@ -50,7 +51,7 @@ export function MetricStrip({ summary }: MetricStripProps) {
   return (
     <section className="metric-strip" aria-label="Battle analytics summary">
       {metrics.map((metric) => (
-        <div className="metric-tile" key={metric.label}>
+        <SpotlightCard className="metric-tile" key={metric.label}>
           <span>{metric.label}</span>
           <strong className="metric-value">
             <CountUpValue
@@ -61,7 +62,7 @@ export function MetricStrip({ summary }: MetricStripProps) {
             />
           </strong>
           <small>{metric.sub}</small>
-        </div>
+        </SpotlightCard>
       ))}
     </section>
   );

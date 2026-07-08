@@ -1,7 +1,7 @@
 import type { DashboardArchive, TeamProfile } from '../types';
 import { fmtPct, labelOrFallback } from '../lib/format';
 import { PokemonSprite } from './PokemonSprite';
-import { ShuffleTitle } from './ShuffleTitle';
+import Shuffle from './reactbits/Shuffle';
 
 interface HeaderProps {
   archive: DashboardArchive | null;
@@ -17,7 +17,19 @@ export function Header({ archive, team }: HeaderProps) {
     <header className="app-header">
       <div className="header-copy">
         <div className="kicker">Team Command Center</div>
-        <h1><ShuffleTitle text={title} /></h1>
+        <h1>
+          <Shuffle
+            text={title}
+            tag="span"
+            textAlign="left"
+            shuffleDirection="right"
+            duration={0.4}
+            stagger={0.02}
+            shuffleTimes={2}
+            threshold={0}
+            rootMargin="0px"
+          />
+        </h1>
         <p>
           {summary
             ? `${summary.finishedBattles} tracked battles. ${summary.wins}W / ${summary.losses}L with ${fmtPct(summary.followRate)} follow rate.`

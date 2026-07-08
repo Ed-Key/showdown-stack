@@ -15,8 +15,12 @@ export function BattleList({ battles }: BattleListProps) {
         </div>
       </div>
       <div className="battle-list">
-        {battles.slice(0, 8).map((battle) => (
-          <article className="battle-row" key={battle.battleId}>
+        {battles.slice(0, 8).map((battle, index) => (
+          <article
+            className="battle-row"
+            key={battle.battleId}
+            style={{ animationDelay: `${index * 70}ms` }}
+          >
             <div>
               <h3>vs {battle.opponent}</h3>
               <p>{battle.endedAtLabel} / {battle.totalTurns} turns</p>

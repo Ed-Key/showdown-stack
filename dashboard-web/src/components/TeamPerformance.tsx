@@ -1,6 +1,7 @@
 import type { PokemonProfile, TeamProfile } from '../types';
 import { fmtPct } from '../lib/format';
 import { PokemonSprite } from './PokemonSprite';
+import SpotlightCard from './reactbits/SpotlightCard';
 
 interface TeamPerformanceProps {
   team: TeamProfile | null;
@@ -13,7 +14,7 @@ function PokemonCard({ pokemon }: { pokemon: PokemonProfile }) {
     : { label: 'Survival', value: fmtPct(pokemon.survivalRate) };
 
   return (
-    <article className="pokemon-card">
+    <SpotlightCard className="pokemon-card">
       <div className="pokemon-card-head">
         <div className="pokemon-portrait">
           <PokemonSprite species={pokemon.species} />
@@ -35,7 +36,7 @@ function PokemonCard({ pokemon }: { pokemon: PokemonProfile }) {
         <Metric label="KO Share" value={fmtPct(pokemon.koShare)} />
         <Metric label="Chip Taken" value={fmtPct(pokemon.avgFieldPressureTakenPct)} />
       </div>
-    </article>
+    </SpotlightCard>
   );
 }
 

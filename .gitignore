@@ -17,3 +17,4 @@ sidecar/
 !.env.example
 !.env.sample
 .superpowers/
+.codex-delegations/

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import ClickSpark from './components/reactbits/ClickSpark';
 import {
   getCoachPresets,
   getDashboardArchive,
@@ -150,7 +151,8 @@ export function App() {
   return (
     <div className="dashboard-root">
       <DashboardBackground />
-      <main className="dashboard-main">
+      <ClickSpark sparkColor="#ffd83d" sparkSize={9} sparkRadius={18} sparkCount={8} duration={450}>
+        <main className="dashboard-main">
         <Header archive={archive} team={activeTeam} />
         {archiveError ? <div className="error-state">{archiveError}</div> : null}
         <MetricStrip summary={archive?.summary || null} />
@@ -187,7 +189,8 @@ export function App() {
             streamEvents={coachStreamEvents}
           />
         </div>
-      </main>
+        </main>
+      </ClickSpark>
     </div>
   );
 }
