@@ -15,7 +15,7 @@ Ninety seconds across two live ladder battles: the grounded matchup plan, live e
 
 https://github.com/user-attachments/assets/3ca10a4e-c25c-4232-a524-548baa257c69
 
-![Demo loop: the engine calls the winning line, then warns about the exact losing move](docs/media/demo-teaser.gif)
+![Demo loop: the engine ranks the super effective move first, one click later the opponent forfeits and Mariga wins the battle](docs/media/demo-teaser.gif)
 
 If the player above does not load, the same video is committed at [docs/media/demo.mp4](docs/media/demo.mp4).
 
