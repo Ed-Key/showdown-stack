@@ -1,6 +1,8 @@
 ## A weekend project that I started bc I kept losing to my friends and unfortunately turned into a three month escapade 🫩 
 # Pokemon Showdown Copilot
 
+[![CI](https://github.com/Ed-Key/showdown-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/Ed-Key/showdown-stack/actions/workflows/ci.yml)
+
 A human-in-the-loop AI copilot for Pokemon Showdown singles battles (Gen 9 National Dex). It watches a live battle in the browser, tracks hidden opponent information, and produces two things: real-time move recommendations from a search engine, and an LLM-generated matchup plan that is grounded in computed game facts and checked for mechanical errors before it reaches the screen.
 
 The project is built as a copilot, not an autoplay bot. The models are treated as signal sources for a human player, with telemetry, postmortems, and verification wrapped around them.
