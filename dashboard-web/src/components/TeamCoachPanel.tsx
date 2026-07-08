@@ -123,7 +123,7 @@ export function TeamCoachPanel({
               value={runMode}
               onChange={(event) => onRunModeChange(event.target.value as CoachRunMode)}
             >
-              <option value="fake">Fake trace</option>
+              <option value="fake">Demo trace (no API call)</option>
               <option value="auto">Auto real if configured</option>
               <option value="real">Real provider</option>
             </select>

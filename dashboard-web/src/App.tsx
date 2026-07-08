@@ -33,7 +33,7 @@ export function App() {
   const [coachPresets, setCoachPresets] = useState<CoachPreset[]>([]);
   const [coachFocusMode, setCoachFocusMode] = useState<CoachFocusMode>('team');
   const [coachPresetId, setCoachPresetId] = useState('openai-gpt-54-mini-balanced');
-  const [coachRunMode, setCoachRunMode] = useState<CoachRunMode>('fake');
+  const [coachRunMode, setCoachRunMode] = useState<CoachRunMode>('auto');
   const [coachRun, setCoachRun] = useState<TeamCoachRun | null>(null);
   const [coachRunLoading, setCoachRunLoading] = useState(false);
   const [coachRunError, setCoachRunError] = useState<string | null>(null);
