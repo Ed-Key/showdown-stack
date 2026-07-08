@@ -34,43 +34,6 @@ The last one is the clearest worked example. A recent loss came from leading a P
 
 <img src="docs/media/architecture.png" alt="Architecture diagram: Chrome extension talks to the Python FastAPI proxy, which feeds the Rust MCTS engine, the grounded matchup planner and LLM API, and the postmortem store behind the React dashboard" width="820">
 
-<details>
-<summary>Same diagram as Mermaid source</summary>
-
-```mermaid
-flowchart TB
-    subgraph browser["Chrome"]
-        page["Pokemon Showdown battle page"]
-        ext["TypeScript WXT extension<br/>live overlay · damage matrix · page-state translation"]
-        page --> ext
-    end
-
-    subgraph repo["This repository"]
-        proxy["Python FastAPI proxy :7271<br/>belief tracking · usage priors · speed inference<br/>PIMC hidden-information hypotheses"]
-        planner["Grounded matchup planner<br/>damage + priors + forme grounding<br/>sanitize-first mechanics verifier"]
-        store[("Battle postmortems<br/>+ engine replays")]
-        dash["React dashboard<br/>postgame analytics"]
-        proxy --- planner
-        proxy --> store
-        store -->|dashboard API| dash
-    end
-
-    subgraph engines["Separate repositories"]
-        engine["Rust Axum engine :7270<br/>MCTS / PUCT · heuristic priors · forced playouts"]
-        nn["Python Metamon sidecar :7273<br/>Kakuna neural policy prior at the search root"]
-        engine --> nn
-    end
-
-    llm["LLM API<br/>Claude Haiku 4.5 by default"]
-
-    ext -->|battle state| proxy
-    proxy -->|recommendations + plan| ext
-    proxy -->|K sampled opponent hypotheses| engine
-    planner -->|grounded prompt| llm
-```
-
-</details>
-
 The Rust search engine lives in my fork of [poke-engine](https://github.com/Ed-Key/poke-engine); the neural sidecar wraps [Metamon](https://github.com/UT-Austin-RPL/metamon) from UT Austin RPL. This repository is the integration and intelligence layer: the browser extension, the proxy where the belief tracking and LLM grounding and verification live, and the postgame dashboard.
 
 ## Features
