@@ -69,7 +69,7 @@ flowchart TB
 
 </details>
 
-The Rust search engine and the neural sidecar are separate components with their own repositories. This repository is the integration and intelligence layer: the browser extension, the proxy where the belief tracking and LLM grounding and verification live, and the postgame dashboard.
+The Rust search engine lives in my fork of [poke-engine](https://github.com/Ed-Key/poke-engine); the neural sidecar wraps [Metamon](https://github.com/UT-Austin-RPL/metamon) from UT Austin RPL. This repository is the integration and intelligence layer: the browser extension, the proxy where the belief tracking and LLM grounding and verification live, and the postgame dashboard.
 
 ## Features
 
