@@ -158,7 +158,9 @@ export function TeamCoachPanel({
       ) : null}
       {isRecentMode && latestBattle ? (
         <div className="coach-summary-line">
-          <strong>{latestBattle.result === 'unknown' ? 'result missing' : latestBattle.result || 'result n/a'}</strong>
+          <span className={`result-pill ${latestBattle.result || ''}`}>
+            {latestBattle.result === 'unknown' ? 'result missing' : latestBattle.result || 'result n/a'}
+          </span>
           <span>vs {latestBattle.opponent || 'opponent'}</span>
           <span>{latestBattle.totalTurns} turns</span>
           <span>{latestBattle.metrics.criticalTurns} critical</span>
