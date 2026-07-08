@@ -7,6 +7,16 @@ The project is built as a copilot, not an autoplay bot. The models are treated a
 
 ![Live copilot overlay in a National Dex battle](docs/media/overlay.png)
 
+## Demo
+
+Ninety seconds across two live ladder battles: the grounded matchup plan, live engine recommendations, a plan violation called out in real time, the coach's post-game review, and a loss the copilot predicted move-for-move.
+
+https://github.com/user-attachments/assets/3ca10a4e-c25c-4232-a524-548baa257c69
+
+![Demo loop: the engine calls the winning line, then warns about the exact losing move](docs/media/demo-teaser.gif)
+
+If the player above does not load, the same video is committed at [docs/media/demo.mp4](docs/media/demo.mp4).
+
 ## Why this project is interesting
 
 Most of the engineering value is not "it plays Pokemon." It is the system around the models:
